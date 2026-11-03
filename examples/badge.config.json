@@ -1,0 +1,25 @@
+{
+  "check": {
+    "minFeature": 0.35,
+    "minDot": 0.9
+  },
+  "layers": [
+    {
+      "name": "backdrop",
+      "select": "#backdrop",
+      "height": 1
+    },
+    {
+      "name": "white",
+      "exclude": "#backdrop, #holes",
+      "z": 1,
+      "height": 0.6,
+      "clip": "backdrop"
+    },
+    {
+      "name": "holes",
+      "select": "#holes",
+      "op": "subtract"
+    }
+  ]
+}
