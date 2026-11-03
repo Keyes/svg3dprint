@@ -126,13 +126,25 @@ result.previewSvg();     // top view with problems marked
 
 `svg3dprint/core` parses SVGs without the geometry kernel. `svg3dprint/writers` has the STL and 3MF writers on their own.
 
-In a browser, call `init({ locateFile: () => manifoldWasmUrl })` first if your bundler doesn't serve `manifold.wasm` next to the script.
+### In the browser
+
+The same API runs in the browser. With Vite (tested with Vite 8, in both the dev server and a production build) it needs no configuration. The bundler emits `manifold.wasm` as an asset, and the WOFF2 decoder is a separate chunk that only loads when a file embeds a WOFF2 font. In the bundle that's about 130 kB gzipped JS plus 208 kB gzipped WASM.
+
+Other bundlers: if `manifold.wasm` isn't found, import its URL yourself and call `init()` before the first `build()`:
+
+```ts
+import { init } from 'svg3dprint';
+import wasmUrl from 'manifold-3d/manifold.wasm?url'; // syntax depends on your bundler
+await init({ locateFile: () => wasmUrl });
+```
 
 ## Development
 
 ```bash
 npm install
-npm test        # builds, then runs the tests in test/
+npm test             # builds, then runs the tests in test/
+npm run demo         # browser demo at http://127.0.0.1:5179/demo/
+npm run demo:build   # production build of the demo into out/demo-dist
 ```
 
 ## License

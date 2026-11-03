@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>svg3Dprint demo</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f6f4; --fg: #1c1c1a; --muted: #6b6b66; --card: #fff; --line: #ddd; --bad: #d1243a; --ok: #2e7d32; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece8; --muted: #9a9a94; --card: #20201e; --line: #34342f; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; grid-template-columns: 300px 1fr; }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+    h1 { grid-column: 1 / -1; margin: 0; font-size: 20px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+    label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+    input, select, button { font: inherit; }
+    input[type=number], select { width: 100%; padding: 6px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    #preview { min-height: 200px; display: grid; place-items: center; background: repeating-conic-gradient(#8881 0 25%, transparent 0 50%) 0 0 / 16px 16px; border-radius: 6px; }
+    #preview svg { max-width: 100%; max-height: 420px; height: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+    td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+    .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; border: 1px solid #8886; }
+    .bad { color: var(--bad); } .ok { color: var(--ok); }
+    #status { color: var(--muted); margin-top: 8px; white-space: pre-wrap; }
+    ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>svg3Dprint: browser demo</h1>
+    <section>
+      <label>SVG file</label>
+      <input id="file" type="file" accept=".svg,image/svg+xml">
+      <label>or a test fixture</label>
+      <div class="row" id="fixtures"></div>
+      <label for="mode">Layers</label>
+      <select id="mode">
+        <option value="flat">By colour, flat</option>
+        <option value="relief">By colour, relief on base plate</option>
+      </select>
+      <label for="width">Width (mm, empty = as declared)</label>
+      <input id="width" type="number" min="1" step="1">
+      <label for="minFeature">Min feature (mm)</label>
+      <input id="minFeature" type="number" value="0.35" min="0.1" step="0.05">
+      <div class="row" style="margin-top:14px">
+        <button id="build" disabled>Build</button>
+        <button id="dl3mf" disabled>Download 3MF</button>
+        <button id="dlstl" disabled>Download STL</button>
+      </div>
+      <div id="status">Loading geometry kernel…</div>
+    </section>
+    <section>
+      <div id="preview"></div>
+      <table id="layers"></table>
+      <ul id="warnings"></ul>
+    </section>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

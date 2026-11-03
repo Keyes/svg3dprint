@@ -7,7 +7,9 @@
     "build": "tsc -p .",
     "dev": "tsc -p . --watch",
     "test": "npm run build && node --test test/*.test.mjs",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "demo": "vite --port 5179 --strictPort --host 127.0.0.1",
+    "demo:build": "npm run build && vite build demo --outDir ../out/demo-dist --emptyOutDir"
   },
   "keywords": [
     "svg",
@@ -29,7 +31,8 @@
   "devDependencies": {
     "@fontsource/inter": "^5.3.0",
     "@types/node": "^22.20.5",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
   },
   "engines": {
     "node": ">=20"
