@@ -270,6 +270,8 @@ export interface LayerIssues {
   thinCount: number;
   gapCount: number;
   floatingCount: number;
+  /** Area of the largest reported piece, mm². */
+  largest: number;
 }
 
 /** Contour count, ignoring hairline slivers that boolean round-off leaves where pieces rejoin. */
@@ -337,8 +339,9 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
         return keep;
       });
       const out = pieces.length ? CrossSection.compose(pieces) : empty(wasm);
+      const largest = Math.max(0, ...pieces.map((p) => p.area()));
       pieces.forEach((p) => p.delete());
-      return { cs: out, count: pieces.length };
+      return { cs: out, count: pieces.length, largest };
     };
     const opened = k(k(cs.offset(-r, 'Round', 2, segmentsFor(r))).offset(r, 'Round', 2, segmentsFor(r)));
     const thin = significant(k(cs.subtract(opened)), (p) => changesTopology(cs, p, 'subtract'));
@@ -356,14 +359,14 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
     if (support) gapArea = k(gapArea.intersect(support));
     const gaps = significant(gapArea, (p) => changesTopology(cs, p, 'add'));
 
-    let floating = { cs: empty(wasm), count: 0 };
+    let floating = { cs: empty(wasm), count: 0, largest: 0 };
     if (layer.z > 1e-9) {
       floating.cs.delete();
       const unsupported = support ? k(cs.subtract(support)) : cs;
       floating = significant(unsupported, () => true);
     }
     k.free();
-    result.set(layer.name, { thin: thin.cs, gaps: gaps.cs, floating: floating.cs, thinCount: thin.count, gapCount: gaps.count, floatingCount: floating.count });
+    result.set(layer.name, { thin: thin.cs, gaps: gaps.cs, floating: floating.cs, thinCount: thin.count, gapCount: gaps.count, floatingCount: floating.count, largest: Math.max(thin.largest, gaps.largest, floating.largest) });
   }
   for (const tiles of tilesOf.values()) for (const t of tiles.values()) t.delete();
   for (const o of occupiedBy.values()) o.delete();

@@ -1,7 +1,7 @@
 // svg3dprint: SVG → multicolour 3D print. Works in Node and in the browser.
 import Module from 'manifold-3d';
 import type { CrossSection } from 'manifold-3d';
-import { FontLibrary, loadFontFaces, parseFont } from './core/fonts.js';
+import { FontLibrary, loadFontFaces, parseFontCached, type FontLoader } from './core/fonts.js';
 import { parseSvg, renderShapes, warningCollector, type ParseOptions } from './core/svg.js';
 import type { Point, Shape, Warning } from './core/types.js';
 import { boundsOf, checkLayers, composeLayers, extrudeLayer, scope, toPathData, type Mesh, type Wasm } from './geometry.js';
@@ -37,10 +37,18 @@ export interface Options extends ColorModeOptions {
   vars?: Record<string, string>;
   /** Extra fonts, in addition to those embedded with @font-face. */
   fonts?: { family: string; data: Uint8Array; weight?: number; style?: string }[];
+  /** Reads @font-face fonts that point at a file or URL instead of a data: URI. Without it, only embedded fonts load. */
+  loadFont?: FontLoader;
   DOMParser?: ParseOptions['DOMParser'];
 }
 
-export interface LayerIssueCounts { thin: number; gaps: number; floating: number }
+export interface LayerIssueCounts {
+  thin: number;
+  gaps: number;
+  floating: number;
+  /** Area of the largest problem spot, mm² (0 if none). */
+  largest: number;
+}
 
 export interface LayerResult {
   name: string;
@@ -49,6 +57,8 @@ export interface LayerResult {
   z: number;
   height: number;
   mesh: Mesh;
+  /** Top view as SVG path data, in mm in the SVG's coordinates (y down), even-odd fill. */
+  outline: string;
   /** mm³ */
   volume: number;
   issues: LayerIssueCounts;
@@ -88,8 +98,8 @@ export function init(options?: { locateFile?: () => string }): Promise<Wasm> {
 async function prepare(svgText: string, options: Options, warn: (c: string, m: string) => void) {
   const svg = parseSvg(svgText, { vars: options.vars, scale: options.scale, DOMParser: options.DOMParser }, warn);
   const fonts = new FontLibrary();
-  await loadFontFaces(svg.stylesheet.fontFaces, fonts, warn);
-  for (const f of options.fonts ?? []) fonts.add(f.family, await parseFont(f.data), { weight: f.weight, style: f.style });
+  await loadFontFaces(svg.stylesheet.fontFaces, fonts, warn, options.loadFont);
+  for (const f of options.fonts ?? []) fonts.add(f.family, await parseFontCached(f.data), { weight: f.weight, style: f.style });
   return { svg, fonts };
 }
 
@@ -141,14 +151,15 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
       name: l.name,
       color: l.displayColor ?? shapes.find((s) => l.match(s))?.color ?? '#808080',
       z: l.z, height: l.height, mesh, volume,
-      issues: { thin: is.thinCount, gaps: is.gapCount, floating: is.floatingCount },
+      outline: toPathData(cs),
+      issues: { thin: is.thinCount, gaps: is.gapCount, floating: is.floatingCount, largest: is.largest },
     };
   });
 
   // keep the preview as path data so no WASM memory outlives this call
   const preview = {
     viewBox: [bounds.min[0], bounds.min[1], bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]],
-    layers: [...results].sort((a, b) => a.z - b.z).map((r) => ({ color: r.color, d: toPathData(sections.get(r.name)!) })),
+    layers: [...results].sort((a, b) => a.z - b.z).map((r) => ({ color: r.color, d: r.outline })),
     issues: [...issues.values()].map((is) => ({ thin: toPathData(is.thin), gaps: toPathData(is.gaps), floating: toPathData(is.floating) })),
   };
   for (const is of issues.values()) { is.thin.delete(); is.gaps.delete(); is.floating.delete(); }
@@ -164,7 +175,7 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
     ok,
     report: () => ({
       ok, size, minFeature,
-      layers: results.map(({ mesh: _m, ...r }) => ({ ...r, volume: Math.round(r.volume * 100) / 100 })),
+      layers: results.map(({ mesh: _m, outline: _o, ...r }) => ({ ...r, volume: Math.round(r.volume * 100) / 100 })),
       warnings,
     }),
     previewSvg: ({ issues: showIssues = true } = {}) => {

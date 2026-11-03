@@ -57,19 +57,59 @@ export async function parseFont(bytes: Uint8Array): Promise<Font> {
   return opentype.parse(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
 }
 
-/** Loads every @font-face whose src contains a data: URI. Faces pointing at files or URLs are reported. */
-export async function loadFontFaces(faces: FontFace[], library: FontLibrary, warn: (code: string, msg: string) => void): Promise<void> {
+/** Fetches the bytes of a font that @font-face references by URL (not a data: URI). */
+export type FontLoader = (url: string) => Promise<ArrayBuffer | Uint8Array>;
+
+// Parsed fonts are cached, so building the same SVG repeatedly (e.g. on every keystroke) doesn't re-parse them.
+const embeddedCache = new Map<string, Promise<Font>>();
+const loadedCache = new WeakMap<FontLoader, Map<string, Promise<Font>>>();
+const bytesCache = new WeakMap<Uint8Array, Promise<Font>>();
+const MAX_EMBEDDED = 64;
+
+function cached<K>(cache: { get(k: K): Promise<Font> | undefined; set(k: K, v: Promise<Font>): unknown; delete(k: K): unknown }, key: K, make: () => Promise<Font>): Promise<Font> {
+  let p = cache.get(key);
+  if (!p) {
+    p = make();
+    p.catch(() => cache.delete(key)); // don't keep failures
+    cache.set(key, p);
+  }
+  return p;
+}
+
+/** Parses font bytes, cached by the array's identity. */
+export function parseFontCached(bytes: Uint8Array): Promise<Font> {
+  return cached(bytesCache, bytes, () => parseFont(bytes));
+}
+
+/**
+ * Loads every @font-face. Embedded data: URIs are always read; faces that point at a file or URL are read through
+ * `loader` if one is given, and reported otherwise.
+ */
+export async function loadFontFaces(faces: FontFace[], library: FontLibrary, warn: (code: string, msg: string) => void, loader?: FontLoader): Promise<void> {
   for (const face of faces) {
     const urls = [...face.src.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
-    const data = urls.map(decodeDataUri).find((d): d is Uint8Array => !!d);
-    if (!data) {
+    const embedded = urls.find((u) => /^data:/i.test(u.trim()));
+    let font: Promise<Font> | null = null;
+    if (embedded) {
+      if (embeddedCache.size >= MAX_EMBEDDED) embeddedCache.clear();
+      font = cached(embeddedCache, embedded, () => parseFont(decodeDataUri(embedded)!));
+    } else if (loader && urls.length) {
+      let perLoader = loadedCache.get(loader);
+      if (!perLoader) loadedCache.set(loader, (perLoader = new Map()));
+      const url = urls[0];
+      font = cached(perLoader, url, async () => {
+        const b = await loader(url);
+        return parseFont(b instanceof Uint8Array ? b : new Uint8Array(b));
+      });
+    }
+    if (!font) {
       warn('font-not-embedded', `@font-face "${face.family}" points at ${urls[0] ?? 'nothing'}; only embedded data: URIs are loaded`);
       continue;
     }
     try {
-      library.add(face.family, await parseFont(data), { weight: face.weight, style: face.style });
+      library.add(face.family, await font, { weight: face.weight, style: face.style });
     } catch (e) {
-      warn('font-invalid', `@font-face "${face.family}" could not be parsed: ${(e as Error).message}`);
+      warn('font-invalid', `@font-face "${face.family}" could not be loaded: ${(e as Error).message}`);
     }
   }
 }

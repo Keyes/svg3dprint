@@ -116,3 +116,19 @@ test('3MF and STL output', async () => {
   assert.equal(stl[0].data.length, 84 + 50 * n);
   assert.match(r.previewSvg(), /<svg[^>]+viewBox/);
 });
+
+test('fonts referenced by URL load through loadFont, and are parsed once', async () => {
+  const woff2 = fs.readFileSync(new URL('../node_modules/@fontsource/inter/files/inter-latin-700-normal.woff2', import.meta.url));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="10mm" viewBox="0 0 40 10">
+    <style>@font-face { font-family: Inter; font-weight: 700; src: url("fonts/inter.woff2"); }</style>
+    <text x="1" y="8" font-family="Inter" font-weight="700" font-size="8">Hi</text></svg>`;
+  await assert.rejects(build(svg), /Font "Inter" is not embedded/);
+  const requested = [];
+  const loadFont = async (url) => { requested.push(url); return woff2; };
+  const a = await build(svg, { loadFont });
+  const b = await build(svg, { loadFont });
+  assert.deepEqual(requested, ['fonts/inter.woff2']);
+  assert.ok(a.layers[0].volume > 5);
+  assert.equal(a.layers[0].volume, b.layers[0].volume);
+  assert.match(a.layers[0].outline, /^M/);
+});

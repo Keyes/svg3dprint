@@ -71,7 +71,9 @@ Text needs its fonts embedded in the SVG:
 @font-face { font-family: "Inter"; font-weight: 700; src: url(data:font/woff2;base64,...) format("woff2"); }
 ```
 
-TTF, OTF, WOFF and WOFF2 all work. A font that isn't embedded is an error, and so is a character the font has no glyph for. The alternative is to convert the text to paths in your editor. Library users can pass extra fonts with the `fonts` option.
+TTF, OTF, WOFF and WOFF2 all work. A font that isn't embedded is an error, and so is a character the font has no glyph for. The alternative is to convert the text to paths in your editor.
+
+Library users have two more options: pass font files directly with the `fonts` option, or pass a `loadFont(url)` function that reads `@font-face` fonts referenced by URL (for example with `fetch` relative to the page, or from disk). Parsed fonts are cached, so building the same SVG again doesn't parse them again.
 
 ## Printability check
 
@@ -116,7 +118,8 @@ The badge-template extras also work: `data-max-width`, `data-max-lines`, `data-l
 import { build, inspect } from 'svg3dprint';
 
 const result = await build(svgText, { base: 1.2, width: 80, check: { minFeature: 0.4 } });
-result.layers;           // [{ name, color, z, height, mesh: { vertices, triangles }, volume, issues }]
+result.layers;           // [{ name, color, z, height, mesh: { vertices, triangles }, outline, volume, issues }]
+                         // outline: top view as SVG path data (mm); issues: { thin, gaps, floating, largest (mm²) }
 result.ok;               // no printability problems
 result.warnings;         // [{ code, message }]
 await result.to3MF();    // Uint8Array
