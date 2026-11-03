@@ -132,3 +132,43 @@ test('fonts referenced by URL load through loadFont, and are parsed once', async
   assert.equal(a.layers[0].volume, b.layers[0].volume);
   assert.match(a.layers[0].outline, /^M/);
 });
+
+test('Bambu project: filament per colour, prime tower only when colours share a layer, layout', async () => {
+  const { zip, unzip } = await import('../dist/writers/index.js');
+  const { plateLayout } = await import('../dist/index.js');
+  const settings = {
+    filament_colour: ['#000000', '#000000'], filament_multi_colour: ['#000000', '#000000'],
+    printable_area: ['0x0', '256x0', '256x256', '0x256'], enable_prime_tower: '1', wall_generator: 'classic',
+    wipe_tower_x: ['165'], wipe_tower_y: ['217'], different_settings_to_system: ['', '', '', ''],
+  };
+  const project = await zip([
+    { name: 'Metadata/project_settings.config', data: JSON.stringify(settings) },
+    { name: '3D/3dmodel.model', data: '<?xml version="1.0"?>\n<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><metadata name="Application">BambuStudio</metadata><resources/></model>' },
+  ]);
+  const read = async (bytes) => {
+    const files = await unzip(bytes);
+    const text = (n) => new TextDecoder().decode(files.get(n));
+    return { files, settings: JSON.parse(text('Metadata/project_settings.config')), model: text('Metadata/model_settings.config') };
+  };
+
+  const flat = await build(fixture('text-woff2.svg'));
+  await assert.rejects(flat.toBambu3MF(project), /needs 3 filaments but the Bambu project has 2/);
+
+  const two = `<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="20mm" viewBox="0 0 40 20">
+    <rect width="40" height="20" fill="#0b3d91"/><circle cx="20" cy="10" r="6" fill="#ffd400"/></svg>`;
+  const f = await read(await (await build(two)).toBambu3MF(project));
+  assert.deepEqual(f.settings.filament_colour, ['#0B3D91', '#FFD400']);
+  assert.equal(f.settings.enable_prime_tower, '1'); // flat: both colours on every layer
+  assert.equal(f.settings.wall_generator, 'arachne');
+  assert.deepEqual([...f.model.matchAll(/<part[\s\S]*?key="extruder" value="(\d)"/g)].map((m) => m[1]), ['1', '2']);
+
+  const r = await read(await (await build(two, { base: 1.2 })).toBambu3MF(project));
+  assert.equal(r.settings.enable_prime_tower, '0'); // relief: one change, no tower
+  assert.match(r.settings.different_settings_to_system[0], /enable_prime_tower/);
+  assert.ok(r.files.has('3D/Objects/object_1.model'));
+
+  const grid = plateLayout(6, [70, 105], [256, 256]);
+  assert.equal(grid.capacity, 6);
+  assert.deepEqual(plateLayout(1, [70, 105], [256, 256]).slots, [[128, 128]]);
+  assert.equal(plateLayout(6, [70, 105], [256, 256], true).capacity, 5);
+});

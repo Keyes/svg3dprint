@@ -25,6 +25,10 @@ Size:
 
 Output:
   -o, --out <path>      file.3mf, file.stl (one file per layer: file.<layer>.stl) or a directory
+  -p, --project <3mf>   write a Bambu Studio project based on this one (saved from Bambu Studio): its printer,
+                        process and filament presets, one filament slot per colour
+  --prime-tower         Bambu project: prime tower on (default: only if two colours share a layer)
+  --no-prime-tower      Bambu project: prime tower off
   -f, --format <list>   3mf, stl or 3mf,stl (default: from --out, else 3mf)
   --report <file>       write the check as .svg (top view, issues marked) or .json
   --var <key=value>     value for a {{variable}} in the SVG (repeatable)
@@ -57,7 +61,8 @@ async function main() {
       scale: { type: 'string' }, width: { type: 'string' }, height: { type: 'string' },
       report: { type: 'string' }, var: { type: 'string', multiple: true },
       'min-feature': { type: 'string' }, 'min-dot': { type: 'string' },
-      strict: { type: 'boolean' }, 'no-clip': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
+      strict: { type: 'boolean' }, 'no-clip': { type: 'boolean' },
+      project: { type: 'string', short: 'p' }, 'prime-tower': { type: 'boolean' }, 'no-prime-tower': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
     },
   });
   if (a.version) {
@@ -147,7 +152,10 @@ async function main() {
   else { fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true }); out = out.replace(/\.(3mf|stl)$/i, ''); }
   const written: string[] = [];
   if (formats.includes('3mf')) {
-    fs.writeFileSync(`${out}.3mf`, await result.to3MF(base));
+    const project = a.project ?? (config as { project?: string }).project;
+    const primeTower = a['prime-tower'] ? true : a['no-prime-tower'] ? false : undefined;
+    const bytes = project ? await result.toBambu3MF(fs.readFileSync(project), { name: base, primeTower }) : await result.to3MF(base);
+    fs.writeFileSync(`${out}.3mf`, bytes);
     written.push(`${out}.3mf`);
   }
   if (formats.includes('stl')) {

@@ -9,11 +9,13 @@ npx svg3dprint build logo.svg                    # logo.3mf, one part per colour
 npx svg3dprint build logo.svg --base 1.2         # relief: base plate + colours 0.6 mm on top
 npx svg3dprint build logo.svg --width 80 -f stl  # 80 mm wide, one STL per colour
 npx svg3dprint check logo.svg --report issues.svg
+npx svg3dprint build logo.svg -p my-printer.3mf   # Bambu Studio project, one filament slot per colour
 ```
 
 ## What you get
 
 - **3MF** (default): one object with one part per colour, each carrying its colour. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it as a single multi-part object; you assign a filament to each part.
+- **Bambu Studio project**, with `-p my-printer.3mf`: the model is placed in a copy of a project you saved from Bambu Studio, so printer, process and filament presets come from there. Each colour gets its own filament slot, and the slot colours are set to match. The prime tower switches on only when two colours share a layer (flat mode); stacked colours (relief) need just one filament change and don't get one. `--prime-tower` / `--no-prime-tower` override that. Walls are set to Arachne, which prints fine detail better. The project needs at least as many filaments as the model has colours. Add them in Bambu Studio and save before using it.
 - **STL**: one file per part (`logo.<part>.stl`). STL can't store colours.
 - **Report**: after every build, a list of each part with its height, volume and printability problems. `--report issues.svg` draws a top view with problems marked: red = too thin, amber = gap too narrow (it will close up), purple = floating (a raised part with nothing beneath it). `--report issues.json` gives the same as data.
 
@@ -126,6 +128,20 @@ await result.to3MF();    // Uint8Array
 result.toSTL();          // [{ name, data: Uint8Array }]
 result.previewSvg();     // top view with problems marked
 ```
+
+Bambu projects with several objects or plates (batches, copies):
+
+```ts
+import { toBambu3MF, plateLayout, projectInfo } from 'svg3dprint';
+
+const { bed } = await projectInfo(projectBytes);
+const { capacity } = plateLayout(Infinity, [70, 105], bed);   // how many 70 × 105 mm objects fit on a plate
+const file = await toBambu3MF(projectBytes, [
+  { name: 'Plate 1', objects: [{ name: 'Badge 1', parts: [{ name: 'base', color: '#000aad', mesh, filament: 1 }, ...] }] },
+], { primeTower: false });
+```
+
+Parts of the same colour share a filament slot unless `filament` sets one. A plate can carry a `thumbnail` PNG. `plateLayout()` returns the same slot positions the writer uses, so you can draw matching thumbnails.
 
 `svg3dprint/core` parses SVGs without the geometry kernel. `svg3dprint/writers` has the STL and 3MF writers on their own.
 

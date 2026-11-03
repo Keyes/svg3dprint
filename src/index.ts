@@ -8,9 +8,11 @@ import { boundsOf, checkLayers, composeLayers, extrudeLayer, scope, toPathData, 
 import { colorLayers, configLayers, type ColorModeOptions, type LayerConfig, type ResolvedLayer } from './layers.js';
 import { toSTL } from './writers/stl.js';
 import { to3MF } from './writers/threemf.js';
+import { toBambu3MF, type BambuOptions } from './writers/bambu.js';
 
 export type { LayerConfig, ColorModeOptions, Mesh, Warning };
-export { toSTL, to3MF };
+export { toSTL, to3MF, toBambu3MF };
+export { projectInfo, plateLayout, type BambuPart, type BambuObject, type BambuPlate, type BambuOptions, type ProjectInfo } from './writers/bambu.js';
 
 export const DEFAULT_MIN_FEATURE = 0.35;
 
@@ -83,6 +85,11 @@ export interface BuildResult {
   /** Top view of the print geometry with issues highlighted (thin: red, gaps: amber, floating: purple). */
   previewSvg(options?: { issues?: boolean }): string;
   to3MF(name?: string): Promise<Uint8Array>;
+  /**
+   * Bambu Studio project: the model on one plate of a copy of `project` (a .3mf saved from Bambu Studio), one
+   * filament slot per colour. For several objects or plates, use toBambu3MF() directly.
+   */
+  toBambu3MF(project: Uint8Array, options?: BambuOptions & { name?: string }): Promise<Uint8Array>;
   /** One STL per layer (STL has no colours). */
   toSTL(): { name: string; data: Uint8Array }[];
 }
@@ -192,6 +199,8 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x - m} ${y - m} ${w + 2 * m} ${h + 2 * m}" width="${(w + 2 * m).toFixed(2)}mm" height="${(h + 2 * m).toFixed(2)}mm">\n${paths.join('\n')}\n</svg>\n`;
     },
     to3MF: (name) => to3MF(results.map((r) => ({ name: r.name, color: r.color, mesh: r.mesh })), { name }),
+    toBambu3MF: (project, { name = 'svg3dprint', ...opts } = {}) =>
+      toBambu3MF(project, [{ name, objects: [{ name, parts: results.map((r) => ({ name: r.name, color: r.color, mesh: r.mesh })) }] }], opts),
     toSTL: () => results.map((r) => ({ name: r.name, data: toSTL(r.mesh, r.name) })),
   };
 }
