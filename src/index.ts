@@ -5,7 +5,7 @@ import { FontLibrary, loadFontFaces, parseFontCached, type FontLoader } from './
 import { parseSvg, renderShapes, warningCollector, type ParseOptions } from './core/svg.js';
 import type { Point, Shape, Warning } from './core/types.js';
 import { boundsOf, checkLayers, composeLayers, extrudeLayer, scope, toPathData, type Mesh, type Wasm } from './geometry.js';
-import { colorLayers, configLayers, type ColorModeOptions, type LayerConfig, type ResolvedLayer } from './layers.js';
+import { colorLayers, configLayers, mergeColors, type ColorModeOptions, type LayerConfig, type ResolvedLayer } from './layers.js';
 import { toSTL } from './writers/stl.js';
 import { to3MF } from './writers/threemf.js';
 import { toBambu3MF, type BambuOptions } from './writers/bambu.js';
@@ -118,8 +118,13 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
   const wasm = await init();
   const { list: warnings, warn } = warningCollector();
   const { svg, fonts } = await prepare(svgText, options, warn);
-  const shapes = renderShapes(svg, fonts, warn);
+  let shapes = renderShapes(svg, fonts, warn);
   if (!shapes.length) throw new Error('The SVG has nothing to print (no filled or stroked shapes)');
+  if (!options.layers?.length) {
+    const colors = new Set(shapes.map((s) => s.color)).size;
+    if (options.colors && colors > options.colors) shapes = mergeColors(shapes, options.colors);
+    else if (!options.colors && colors > 4) warn('many-colors', `${colors} colours become ${colors} parts, one filament each. To merge similar colours, use --colors 4 (or the number of filaments you have)`);
+  }
   const layers = resolveLayers(shapes, options);
   const minFeature = options.check?.minFeature ?? DEFAULT_MIN_FEATURE;
 
@@ -127,7 +132,7 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
   let sections = composeLayers(wasm, shapes, layers, { minDot: options.check?.minDot ?? 0 });
   sections.forEach((cs) => k(cs));
   const printed = layers.filter((l) => sections.has(l.name));
-  for (const l of printed) if (sections.get(l.name)!.isEmpty()) warn('empty-layer', `Layer "${l.name}" is empty`);
+  for (const l of printed) if (sections.get(l.name)!.isEmpty()) warn('empty-layer', `Layer "${l.name}" is empty (covered by shapes drawn on top of it, or cut away) and was left out`);
   const unmatched = shapes.filter((s) => !layers.some((l) => l.match(s))).length;
   if (unmatched) warn('unmatched', `${unmatched} shape${unmatched > 1 ? 's' : ''} matched no layer and ${unmatched > 1 ? 'were' : 'was'} left out`);
 

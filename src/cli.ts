@@ -15,6 +15,7 @@ Layers (default: one part per colour, side by side):
   --thickness <mm>      thickness of every part (default 1)
   --base <mm>           relief mode: the first shape's colour becomes a base plate this thick ...
   --relief <mm>         ... and the other colours sit on top, this thick (default 0.6)
+  --colors <n>          merge similar colours until at most n remain (one filament each)
   -c, --config <json>   layers from a config file (see README)
 
 Size:
@@ -57,7 +58,7 @@ async function main() {
     allowPositionals: true,
     options: {
       out: { type: 'string', short: 'o' }, format: { type: 'string', short: 'f' }, config: { type: 'string', short: 'c' },
-      thickness: { type: 'string' }, base: { type: 'string' }, relief: { type: 'string' },
+      thickness: { type: 'string' }, base: { type: 'string' }, relief: { type: 'string' }, colors: { type: 'string' },
       scale: { type: 'string' }, width: { type: 'string' }, height: { type: 'string' },
       report: { type: 'string' }, var: { type: 'string', multiple: true },
       'min-feature': { type: 'string' }, 'min-dot': { type: 'string' },
@@ -93,6 +94,7 @@ async function main() {
     thickness: num(a.thickness, 'thickness') ?? config.thickness,
     base: num(a.base, 'base') ?? config.base,
     relief: num(a.relief, 'relief') ?? config.relief,
+    colors: num(a.colors, 'colors') ?? config.colors,
     scale: num(a.scale, 'scale') ?? config.scale,
     width: num(a.width, 'width') ?? config.width,
     height: num(a.height, 'height') ?? config.height,
@@ -129,6 +131,10 @@ async function main() {
       console.log(`  ${l.name.padEnd(18)} ${l.color}  z ${l.z.toFixed(2)}–${(l.z + l.height).toFixed(2)}  ${l.volume.toFixed(0).padStart(6)} mm³  ${problems || 'ok'}`);
     }
     for (const w of result.warnings) console.log(`warning: ${w.message}`);
+    const longest = Math.max(x, y);
+    if (!options.width && !options.height && !options.scale && (longest < 10 || longest > 250)) {
+      console.log(`hint: the model is ${x.toFixed(1)} × ${y.toFixed(1)} mm${longest < 10 ? ', very small' : ', larger than most beds'}. Use --width <mm> to resize it`);
+    }
     if (!result.ok) console.log(`printability: problems below ${report.minFeature} mm found${a.report ? '' : ' (use --report issues.svg to see where)'}`);
   }
 

@@ -16,6 +16,8 @@ export interface SvgDocument {
   heightMm: number;
   /** User units of the root element → mm. */
   rootTransform: Matrix;
+  /** Width and height of the root viewport in user units (what percentages refer to). */
+  viewport: [number, number];
   stylesheet: Stylesheet;
   ids: Map<string, Element>;
   /** {{variables}} used in the source. */
@@ -114,7 +116,7 @@ type Style = Record<string, string>;
 const INHERITED = ['fill', 'fill-rule', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linejoin', 'stroke-linecap',
   'stroke-miterlimit', 'stroke-opacity', 'stroke-dasharray', 'clip-rule', 'color', 'font-family', 'font-size',
   'font-weight', 'font-style', 'letter-spacing', 'text-anchor', 'text-transform', 'visibility'];
-const NOT_INHERITED = ['display', 'opacity', 'clip-path', 'mask', 'filter', 'stop-color', 'stop-opacity',
+const NOT_INHERITED = ['display', 'opacity', 'clip-path', 'mask', 'filter', 'stop-color', 'stop-opacity', 'transform-origin',
   'marker-start', 'marker-mid', 'marker-end', 'marker'];
 const PROPS = new Set([...INHERITED, ...NOT_INHERITED]);
 
@@ -186,7 +188,8 @@ export function parseSvg(svgText: string, options: ParseOptions = {}, warn: Warn
 
   const k = MM_PER_PX * (options.scale ?? 1);
   const rootTransform = multiply(scale(k), viewBoxTransform(vb, wPx!, hPx!, attr(root, 'preserveAspectRatio')));
-  return { root, widthMm: wPx! * k, heightMm: hPx! * k, rootTransform, stylesheet, ids, variables };
+  const viewport: [number, number] = vb ? [vb[2], vb[3]] : [wPx!, hPx!];
+  return { root, widthMm: wPx! * k, heightMm: hPx! * k, rootTransform, viewport, stylesheet, ids, variables };
 }
 
 // ---------- rendering ----------
@@ -220,7 +223,7 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
       const tag = ref && nameOf(ref);
       if (tag === 'linearGradient' || tag === 'radialGradient') {
         const stop = gradientStop(ref!);
-        warn('gradient', `Gradient #${url[1]} printed in its first colour (${stop ?? 'none'})`);
+        warn('gradient', 'Gradients are printed in their first colour');
         value = stop ?? 'none';
       } else {
         warn('paint-server', `${tag ? `<${tag}>` : 'Missing'} paint #${url[1]} not supported${url[2] ? `; using fallback ${url[2]}` : ''}`);
@@ -275,7 +278,7 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
       if (['marker', 'marker-start', 'marker-mid', 'marker-end'].some((p) => style[p] && style[p] !== 'none')) warn('marker', 'Markers are not supported and were ignored');
     }
 
-    let T = multiply(parent.T, parseTransform(attr(el, 'transform')));
+    let T = multiply(parent.T, withOrigin(parseTransform(attr(el, 'transform')), style['transform-origin'], svg.viewport));
     if (tag === 'svg' && el !== svg.root) {
       const n = (k: string) => lengthPx(attr(el, k)) ?? 0;
       const vb = parseViewBox(el);
@@ -426,6 +429,32 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
 }
 
 const fillRuleOf = (v: string | undefined): FillRule => (v === 'evenodd' ? 'EvenOdd' : 'NonZero');
+
+/**
+ * Applies transform-origin to a transform: translate(origin) · T · translate(-origin).
+ * Percentages and keywords refer to the root viewport (CSS transform-box: view-box, the SVG default).
+ */
+function withOrigin(T: Matrix, origin: string | undefined, [vw, vh]: [number, number]): Matrix {
+  if (!origin || T === IDENTITY) return T;
+  const KEY: Record<string, [number | null, number | null]> = { left: [0, null], right: [1, null], top: [null, 0], bottom: [null, 1], center: [0.5, 0.5] };
+  let x = 0.5 * vw, y = 0.5 * vh;
+  const parts = origin.trim().split(/\s+/).slice(0, 2);
+  // a vertical keyword first ("top left") swaps the order
+  if (parts.length === 2 && (parts[0] === 'top' || parts[0] === 'bottom' || (parts[0] === 'center' && (parts[1] === 'left' || parts[1] === 'right')))) parts.reverse();
+  parts.forEach((p, i) => {
+    const key = KEY[p];
+    if (key) {
+      if (key[0] != null && (i === 0 || p === 'center')) x = key[0] * vw;
+      if (key[1] != null) y = key[1] * vh;
+      if (p === 'center' && i === 1) y = 0.5 * vh;
+      return;
+    }
+    const v = lengthPx(p, i === 0 ? vw : vh);
+    if (v == null) return;
+    if (i === 0) x = v; else y = v;
+  });
+  return multiply(multiply(translate(x, y), T), translate(-x, -y));
+}
 
 function strokeOf(paths: Subpath[], width: number, style: Style) {
   const join = (['miter', 'round', 'bevel'].includes(style['stroke-linejoin']) ? style['stroke-linejoin'] : 'miter') as LineJoin;

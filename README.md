@@ -24,6 +24,7 @@ npx svg3dprint build logo.svg -p my-printer.3mf   # Bambu Studio project, one fi
 **By colour** (default). Every fill and stroke colour becomes a part. Painter's order applies: a shape drawn later covers whatever is underneath it, as it does on screen. The parts therefore fit together without overlaps.
 
 - *Flat* (default): all parts side by side, `--thickness` thick (default 1 mm).
+- *Fewer colours*, `--colors <n>`: merges the closest colours until at most n remain, for example to match the filaments in your AMS. The colour that covers more area wins. Drawings with gradients or many shades need this; without it, more than 4 colours give a warning.
 - *Relief*, `--base <mm>`: the colour of the first shape (usually the background) becomes a base plate under the whole drawing. The other colours sit on top, `--relief` thick (default 0.6 mm). Shapes drawn later in the base colour cut into the relief, as they do on screen.
 
 **Config file**, `-c layers.json`. You define each part yourself:
@@ -98,7 +99,7 @@ Sharp corners and pointed tips are ignored: the slicer rounds them off anyway. A
 ## Supported SVG
 
 Supported:
-- paths and basic shapes, transforms, nested `<svg>`
+- paths and basic shapes, transforms (including `transform-origin`), nested `<svg>`
 - `<use>` and `<symbol>`, `clip-path` (user-space units)
 - `<style>` rules, presentation attributes and inline styles, `currentColor`, opacity
 - strokes with joins, caps and the miter limit

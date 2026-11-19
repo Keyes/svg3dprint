@@ -46,6 +46,8 @@ export interface ColorModeOptions {
   base?: number;
   /** Relief mode: thickness of the other colours on top of the base. Default 0.6. */
   relief?: number;
+  /** Merge similar colours until at most this many remain (one filament each). Default: no limit. */
+  colors?: number;
 }
 
 const NAMES: Record<string, string> = {
@@ -53,6 +55,63 @@ const NAMES: Record<string, string> = {
   '#00ffff': 'cyan', '#ff00ff': 'magenta', '#808080': 'gray', '#ffa500': 'orange', '#800080': 'purple', '#008000': 'green',
 };
 const colorName = (hex: string) => NAMES[hex] ?? hex.slice(1);
+
+/** sRGB "#rrggbb" → CIE Lab (D65). */
+function lab(hex: string): [number, number, number] {
+  const lin = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const [x, y, z] = [
+    (0.4124 * lin[0] + 0.3576 * lin[1] + 0.1805 * lin[2]) / 0.95047,
+    0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2],
+    (0.0193 * lin[0] + 0.1192 * lin[1] + 0.9505 * lin[2]) / 1.08883,
+  ].map((t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116));
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+
+/** Rough painted area of a shape (outline area, or length × width for strokes), for weighting colours. */
+function roughArea(s: Shape): number {
+  if (s.kind === 'stroke') {
+    let len = 0;
+    for (const { points } of s.paths) for (let i = 1; i < points.length; i++) len += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+    return len * s.width;
+  }
+  let a = 0;
+  for (const c of s.contours) {
+    let t = 0;
+    for (let i = 0, j = c.length - 1; i < c.length; j = i++) t += (c[j][0] + c[i][0]) * (c[j][1] - c[i][1]);
+    a += t / 2; // holes wind the other way and subtract
+  }
+  return Math.abs(a);
+}
+
+/**
+ * Merges the two closest colours (distance in Lab, which follows what the eye sees) until at most `max` remain.
+ * The colour covering more area survives. Returns the shapes with their colours replaced.
+ */
+export function mergeColors(shapes: Shape[], max: number): Shape[] {
+  const count = new Map<string, number>();
+  for (const s of shapes) count.set(s.color, (count.get(s.color) ?? 0) + roughArea(s));
+  const groups = [...count].map(([color, n]) => ({ color, n, lab: lab(color), members: [color] }));
+  while (groups.length > Math.max(1, max)) {
+    let best = [0, 1], bestD = Infinity;
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const [a, b] = [groups[i].lab, groups[j].lab];
+        const d = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+        if (d < bestD) { bestD = d; best = [i, j]; }
+      }
+    }
+    const [i, j] = best;
+    const [keep, drop] = groups[i].n >= groups[j].n ? [groups[i], groups[j]] : [groups[j], groups[i]];
+    keep.n += drop.n;
+    keep.members.push(...drop.members);
+    groups.splice(groups.indexOf(drop), 1);
+  }
+  const to = new Map(groups.flatMap((g) => g.members.map((m) => [m, g.color] as const)));
+  return shapes.map((s) => (to.get(s.color) === s.color ? s : { ...s, color: to.get(s.color)! }));
+}
 
 /** By-colour mode: one part per distinct colour, flat (side by side) or as relief on a base plate. */
 export function colorLayers(shapes: Shape[], { thickness = 1, base, relief = 0.6 }: ColorModeOptions = {}): ResolvedLayer[] {

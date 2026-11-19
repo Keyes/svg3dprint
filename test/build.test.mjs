@@ -172,3 +172,34 @@ test('Bambu project: filament per colour, prime tower only when colours share a 
   assert.deepEqual(plateLayout(1, [70, 105], [256, 256]).slots, [[128, 128]]);
   assert.equal(plateLayout(6, [70, 105], [256, 256], true).capacity, 5);
 });
+
+test('transform-origin: keywords and lengths, relative to the viewport', async () => {
+  // a 40 × 40 square rotated 45° about the viewport centre stays centred: bounding box √2 × 40 around (100, 100)
+  const svg = (origin) => `<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="200mm" viewBox="0 0 200 200">
+    <rect x="80" y="80" width="40" height="40" transform="rotate(45)" transform-origin="${origin}"/></svg>`;
+  for (const origin of ['center', '50% 50%', '100 100', 'center center']) {
+    const r = await build(svg(origin), { clip: false });
+    near(r.size[0], 40 * Math.SQRT2, 0.05, origin);
+    assert.match(r.layers[0].outline, /M[\d.]+ /);
+    const xs = r.layers[0].outline.match(/[\d.]+(?= )/g).map(Number);
+    near(Math.min(...xs) + 40 * Math.SQRT2 / 2, 100, 0.05, `${origin} centre`);
+  }
+});
+
+test('--colors merges the closest colours, keeping the ones covering most area', async () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="60mm" height="20mm" viewBox="0 0 60 20">
+    <rect width="20" height="20" fill="#006847"/><rect x="20" width="20" height="20" fill="#ffffff"/>
+    <rect x="40" width="20" height="20" fill="#ce1126"/>
+    <circle cx="30" cy="10" r="1" fill="#1a1a1a"/><circle cx="32" cy="10" r="1" fill="#202020"/><circle cx="34" cy="10" r="1" fill="#252015"/></svg>`;
+  const all = await build(svg);
+  assert.equal(all.layers.length, 6);
+  assert.ok(all.warnings.some((w) => w.code === 'many-colors'));
+  const merged = await build(svg, { colors: 4 });
+  // the three near-blacks (equal area, so any of them may survive) merge into one; the big green, white and red stay
+  const colors = merged.layers.map((l) => l.color);
+  assert.equal(colors.length, 4);
+  for (const c of ['#006847', '#ffffff', '#ce1126']) assert.ok(colors.includes(c), c);
+  assert.equal(colors.filter((c) => ['#1a1a1a', '#202020', '#252015'].includes(c)).length, 1);
+  near(total(merged), total(all), 0.01, 'same total volume');
+  assert.ok(!merged.warnings.some((w) => w.code === 'many-colors'));
+});
