@@ -1,6 +1,6 @@
 // Fonts embedded in the SVG (@font-face with data: URIs), plus fonts handed in through the API.
 import opentype, { type Font } from 'opentype.js';
-import { parseWeight, type FontFace } from './css.js';
+import type { FontFace } from './css.js';
 
 export interface FontEntry { family: string; weight: number; style: string; font: Font }
 
@@ -29,7 +29,7 @@ export class FontLibrary {
   }
 }
 
-export const splitFamilies = (list: string): string[] =>
+const splitFamilies = (list: string): string[] =>
   list.split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
 
 function base64Decode(s: string): Uint8Array {
@@ -40,7 +40,7 @@ function base64Decode(s: string): Uint8Array {
 }
 
 /** Decodes a data: URI. Returns null for anything that isn't one. */
-export function decodeDataUri(uri: string): Uint8Array | null {
+function decodeDataUri(uri: string): Uint8Array | null {
   const m = /^data:([^,]*?),(.*)$/s.exec(uri.trim());
   if (!m) return null;
   return /;base64$/i.test(m[1]) ? base64Decode(m[2]) : new TextEncoder().encode(decodeURIComponent(m[2]));
@@ -113,5 +113,3 @@ export async function loadFontFaces(faces: FontFace[], library: FontLibrary, war
     }
   }
 }
-
-export { parseWeight };

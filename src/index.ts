@@ -3,16 +3,18 @@ import Module from 'manifold-3d';
 import type { CrossSection } from 'manifold-3d';
 import { FontLibrary, loadFontFaces, parseFontCached, type FontLoader } from './core/fonts.js';
 import { parseSvg, renderShapes, warningCollector, type ParseOptions } from './core/svg.js';
+import { mergeColors } from './core/color.js';
 import type { Point, Shape, Warning } from './core/types.js';
-import { boundsOf, checkLayers, composeLayers, extrudeLayer, scope, toPathData, type Mesh, type Wasm } from './geometry.js';
-import { colorLayers, configLayers, mergeColors, type ColorModeOptions, type LayerConfig, type ResolvedLayer } from './layers.js';
+import { boundsOf, checkLayers, composeLayers, extrudeLayer, rect, scope, toPathData, type LayerIssueCounts, type Mesh, type Wasm } from './geometry.js';
+import { colorLayers, configLayers, type ColorModeOptions, type LayerConfig } from './layers.js';
+import { previewSvg, type PreviewData } from './writers/preview.js';
 import { toSTL } from './writers/stl.js';
 import { to3MF } from './writers/threemf.js';
 import { toBambu3MF, type BambuOptions } from './writers/bambu.js';
 
-export type { LayerConfig, ColorModeOptions, Mesh, Warning };
+export type { LayerConfig, ColorModeOptions, LayerIssueCounts, Mesh, Warning, CrossSection };
 export { toSTL, to3MF, toBambu3MF };
-export { projectInfo, plateLayout, type BambuPart, type BambuObject, type BambuPlate, type BambuOptions, type ProjectInfo } from './writers/bambu.js';
+export { projectInfo, plateLayout, plateCapacity, type BambuPart, type BambuObject, type BambuPlate, type BambuOptions, type ProjectInfo } from './writers/bambu.js';
 
 export const DEFAULT_MIN_FEATURE = 0.35;
 
@@ -44,14 +46,6 @@ export interface Options extends ColorModeOptions {
   DOMParser?: ParseOptions['DOMParser'];
 }
 
-export interface LayerIssueCounts {
-  thin: number;
-  gaps: number;
-  floating: number;
-  /** Area of the largest problem spot, mm² (0 if none). */
-  largest: number;
-}
-
 export interface LayerResult {
   name: string;
   /** Display colour, "#rrggbb". */
@@ -71,7 +65,7 @@ export interface Report {
   /** Overall size [x, y, z] in mm. */
   size: [number, number, number];
   minFeature: number;
-  layers: { name: string; color: string; z: number; height: number; volume: number; issues: LayerIssueCounts }[];
+  layers: Omit<LayerResult, 'mesh' | 'outline'>[];
   warnings: Warning[];
 }
 
@@ -110,72 +104,81 @@ async function prepare(svgText: string, options: Options, warn: (c: string, m: s
   return { svg, fonts };
 }
 
-function resolveLayers(shapes: Shape[], options: Options): ResolvedLayer[] {
-  return options.layers?.length ? configLayers(options.layers) : colorLayers(shapes, options);
+type Warn = (code: string, message: string) => void;
+type Sections = Map<string, CrossSection>;
+
+/** By-colour mode: merges similar colours down to `options.colors`, or warns if there are many. */
+function mergeStep(shapes: Shape[], options: Options, warn: Warn): Shape[] {
+  if (options.layers?.length) {
+    if (options.colors) warn('colors-ignored', '--colors only applies in colour mode; with a layer config, the layers decide the parts');
+    return shapes;
+  }
+  const colors = new Set(shapes.map((s) => s.color)).size;
+  if (options.colors && colors > options.colors) return mergeColors(shapes, options.colors);
+  if (!options.colors && colors > 4) warn('many-colors', `${colors} colours become ${colors} parts, one filament each. To merge similar colours, use --colors 4 (or the number of filaments you have)`);
+  return shapes;
+}
+
+function clipToViewport(wasm: Wasm, sections: Sections, w: number, h: number, k: ReturnType<typeof scope>, warn: Warn): Sections {
+  const b = boundsOf(sections.values());
+  if (!(b && (b.min[0] < -1e-6 || b.min[1] < -1e-6 || b.max[0] > w + 1e-6 || b.max[1] > h + 1e-6))) return sections;
+  warn('outside-viewport', 'Parts of the drawing lie outside the SVG viewport and were cut off (use --no-clip to keep them)');
+  const view = k(rect(wasm, 0, 0, w, h));
+  return new Map([...sections].map(([n, cs]) => [n, k(cs.intersect(view))]));
+}
+
+/** Scales to `options.width`/`height`. Frees `k` and throws if nothing is left to print. */
+function fitToSize(sections: Sections, options: Options, k: ReturnType<typeof scope>) {
+  const bounds = boundsOf(sections.values());
+  if (!bounds) { k.free(); throw new Error('Every layer is empty'); }
+  const fitTo = options.width ? options.width / (bounds.max[0] - bounds.min[0]) : options.height ? options.height / (bounds.max[1] - bounds.min[1]) : null;
+  if (!fitTo || Math.abs(fitTo - 1) <= 1e-9) return { sections, bounds };
+  const scaled = new Map([...sections].map(([n, cs]) => [n, k(cs.scale(fitTo))]));
+  return { sections: scaled, bounds: boundsOf(scaled.values())! };
 }
 
 export async function build(svgText: string, options: Options = {}): Promise<BuildResult> {
   const wasm = await init();
   const { list: warnings, warn } = warningCollector();
   const { svg, fonts } = await prepare(svgText, options, warn);
-  let shapes = renderShapes(svg, fonts, warn);
-  if (!shapes.length) throw new Error('The SVG has nothing to print (no filled or stroked shapes)');
-  if (options.colors && options.layers?.length) warn('colors-ignored', '--colors only applies in colour mode; with a layer config, the layers decide the parts');
-  if (!options.layers?.length) {
-    const colors = new Set(shapes.map((s) => s.color)).size;
-    if (options.colors && colors > options.colors) shapes = mergeColors(shapes, options.colors);
-    else if (!options.colors && colors > 4) warn('many-colors', `${colors} colours become ${colors} parts, one filament each. To merge similar colours, use --colors 4 (or the number of filaments you have)`);
-  }
-  const layers = resolveLayers(shapes, options);
+  const rendered = renderShapes(svg, fonts, warn);
+  if (!rendered.length) throw new Error('The SVG has nothing to print (no filled or stroked shapes)');
+  const shapes = mergeStep(rendered, options, warn);
+  const layers = options.layers?.length ? configLayers(options.layers) : colorLayers(shapes, options);
   const minFeature = options.check?.minFeature ?? DEFAULT_MIN_FEATURE;
 
   const k = scope();
-  let sections = composeLayers(wasm, shapes, layers, { minDot: options.check?.minDot ?? 0 });
-  sections.forEach((cs) => k(cs));
-  const printed = layers.filter((l) => sections.has(l.name));
-  for (const l of printed) if (sections.get(l.name)!.isEmpty()) warn('empty-layer', `Layer "${l.name}" is empty (covered by shapes drawn on top of it, or cut away) and was left out`);
+  const composed = composeLayers(wasm, shapes, layers, { minDot: options.check?.minDot ?? 0 });
+  composed.forEach((cs) => k(cs));
+  const printed = layers.filter((l) => composed.has(l.name));
+  for (const l of printed) if (composed.get(l.name)!.isEmpty()) warn('empty-layer', `Layer "${l.name}" is empty (covered by shapes drawn on top of it, or cut away) and was left out`);
   const unmatched = shapes.filter((s) => !layers.some((l) => l.match(s))).length;
   if (unmatched) warn('unmatched', `${unmatched} shape${unmatched > 1 ? 's' : ''} matched no layer and ${unmatched > 1 ? 'were' : 'was'} left out`);
-
-  if (options.clip !== false) {
-    const before = boundsOf(sections.values());
-    const [w, h] = [svg.widthMm, svg.heightMm];
-    if (before && (before.min[0] < -1e-6 || before.min[1] < -1e-6 || before.max[0] > w + 1e-6 || before.max[1] > h + 1e-6)) {
-      warn('outside-viewport', 'Parts of the drawing lie outside the SVG viewport and were cut off (use --no-clip to keep them)');
-      const view = k(new wasm.CrossSection([[[0, 0], [w, 0], [w, h], [0, h]]]));
-      sections = new Map([...sections].map(([n, cs]) => [n, k(cs.intersect(view))]));
-    }
-  }
-  let bounds = boundsOf(sections.values());
-  if (!bounds) { k.free(); throw new Error('Every layer is empty'); }
-  const fitTo = options.width ? options.width / (bounds.max[0] - bounds.min[0]) : options.height ? options.height / (bounds.max[1] - bounds.min[1]) : null;
-  if (fitTo && Math.abs(fitTo - 1) > 1e-9) {
-    sections = new Map([...sections].map(([n, cs]) => [n, k(cs.scale(fitTo))]));
-    bounds = boundsOf(sections.values())!;
-  }
+  const clipped = options.clip === false ? composed : clipToViewport(wasm, composed, svg.widthMm, svg.heightMm, k, warn);
+  const { sections, bounds } = fitToSize(clipped, options, k);
 
   const issues = checkLayers(wasm, layers, sections, minFeature);
   const center: Point = [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2];
   const results: LayerResult[] = printed.filter((l) => !sections.get(l.name)!.isEmpty()).map((l) => {
     const cs = sections.get(l.name)!;
     const { mesh, volume } = extrudeLayer(wasm, cs, center, l.z, l.height);
-    const is = issues.get(l.name)!;
+    const { areas: _a, ...counts } = issues.get(l.name)!;
     return {
       name: l.name,
       color: l.displayColor ?? shapes.find((s) => l.match(s))?.color ?? '#808080',
       z: l.z, height: l.height, mesh, volume,
       outline: toPathData(cs),
-      issues: { thin: is.thinCount, gaps: is.gapCount, floating: is.floatingCount, largest: is.largest },
+      issues: counts,
     };
   });
 
   // keep the preview as path data so no WASM memory outlives this call
-  const preview = {
+  const preview: PreviewData = {
     viewBox: [bounds.min[0], bounds.min[1], bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]],
     layers: [...results].sort((a, b) => a.z - b.z).map((r) => ({ color: r.color, d: r.outline })),
-    issues: [...issues.values()].map((is) => ({ thin: toPathData(is.thin), gaps: toPathData(is.gaps), floating: toPathData(is.floating) })),
+    issues: [...issues.values()].map(({ areas: a }) => ({ thin: toPathData(a.thin), gaps: toPathData(a.gaps), floating: toPathData(a.floating) })),
   };
-  for (const is of issues.values()) { is.thin.delete(); is.gaps.delete(); is.floating.delete(); }
+  for (const { areas: a } of issues.values()) { a.thin.delete(); a.gaps.delete(); a.floating.delete(); }
   k.free();
 
   const size: [number, number, number] = [preview.viewBox[2], preview.viewBox[3], Math.max(...results.map((r) => r.z + r.height))];
@@ -191,19 +194,7 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
       layers: results.map(({ mesh: _m, outline: _o, ...r }) => ({ ...r, volume: Math.round(r.volume * 100) / 100 })),
       warnings,
     }),
-    previewSvg: ({ issues: showIssues = true } = {}) => {
-      const [x, y, w, h] = preview.viewBox;
-      const m = Math.max(w, h) * 0.02;
-      const paths = preview.layers.map((l) => `  <path d="${l.d}" fill="${l.color}" fill-rule="evenodd"/>`);
-      if (showIssues) {
-        for (const is of preview.issues) {
-          if (is.thin) paths.push(`  <path d="${is.thin}" fill="#ff2d55" fill-rule="evenodd"/>`);
-          if (is.gaps) paths.push(`  <path d="${is.gaps}" fill="#ffb800" fill-rule="evenodd"/>`);
-          if (is.floating) paths.push(`  <path d="${is.floating}" fill="#a020f0" fill-opacity="0.7" fill-rule="evenodd"/>`);
-        }
-      }
-      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x - m} ${y - m} ${w + 2 * m} ${h + 2 * m}" width="${(w + 2 * m).toFixed(2)}mm" height="${(h + 2 * m).toFixed(2)}mm">\n${paths.join('\n')}\n</svg>\n`;
-    },
+    previewSvg: (opts) => previewSvg(preview, opts),
     to3MF: (name) => to3MF(results.map((r) => ({ name: r.name, color: r.color, mesh: r.mesh })), { name }),
     toBambu3MF: (project, { name = 'svg3dprint', ...opts } = {}) =>
       toBambu3MF(project, [{ name, objects: [{ name, parts: results.map((r) => ({ name: r.name, color: r.color, mesh: r.mesh })) }] }], opts),
@@ -241,4 +232,3 @@ export async function inspect(svgText: string, options: Options = {}): Promise<I
   return result;
 }
 
-export type { CrossSection };

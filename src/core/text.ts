@@ -31,23 +31,38 @@ function glyphsOf(font: Font, text: string): Glyph[] {
   }
 }
 
+// Shaping per (font, text) is cached: shrink-to-fit re-measures the same strings at many sizes.
+const shapedCache = new WeakMap<Font, Map<string, { glyphs: Glyph[]; kerns: number[] }>>();
+
+function shaped(font: Font, text: string) {
+  let perFont = shapedCache.get(font);
+  if (!perFont) shapedCache.set(font, (perFont = new Map()));
+  let s = perFont.get(text);
+  if (!s) {
+    if (perFont.size >= 4096) perFont.clear();
+    const glyphs = glyphsOf(font, text);
+    s = { glyphs, kerns: glyphs.slice(1).map((next, i) => font.getKerningValue(glyphs[i], next)) };
+    perFont.set(text, s);
+  }
+  return s;
+}
+
 function runGlyphs(run: Run) {
   const { font, size } = run;
   const scale = size / font.unitsPerEm;
-  const glyphs = glyphsOf(font, run.text);
+  const { glyphs, kerns } = shaped(font, run.text);
   const placed: { glyph: Glyph; x: number }[] = [];
   let x = 0;
   glyphs.forEach((g, i) => {
     placed.push({ glyph: g, x });
     x += g.advanceWidth * scale + run.spacing;
-    const next = glyphs[i + 1];
-    if (next) x += font.getKerningValue(g, next) * scale;
+    if (i < kerns.length) x += kerns[i] * scale;
   });
   // trailing letter-spacing doesn't count towards the visual width
   return { placed, width: glyphs.length ? x - run.spacing : 0 };
 }
 
-export function measureLine(runs: Run[]): number {
+function measureLine(runs: Run[]): number {
   return runs.reduce((w, r, i) => w + runGlyphs(r).width + (i < runs.length - 1 ? r.spacing : 0), 0);
 }
 
@@ -133,14 +148,22 @@ export function layoutText(spec: TextBlock, tol = TOLERANCE): { byRun: Point[][]
     return texts.map((t) => [{ ...r, text: t }]);
   };
 
-  // shrink uniformly until the block fits (forced line breaks may exceed maxLines)
-  let k = 1, lines = buildLines(1);
-  for (let iter = 0; iter < 200; iter++) {
-    lines = buildLines(k);
-    const lineCountOk = forced.length > 1 || lines.length <= Math.max(maxLines, 1);
-    if (lineCountOk && lines.every((l) => measureLine(l) <= maxWidth)) break;
-    k *= 0.98;
+  // shrink uniformly in steps of 2 % (at most 200) until the block fits (forced line breaks may exceed maxLines)
+  const kAt = (n: number) => { let k = 1; for (let i = 0; i < n; i++) k *= 0.98; return k; };
+  const fitsAt = (n: number) => {
+    const ls = buildLines(kAt(n));
+    return (forced.length > 1 || ls.length <= Math.max(maxLines, 1)) && ls.every((l) => measureLine(l) <= maxWidth);
+  };
+  let n = 0;
+  if (!(single && wraps && forced.length <= 1 && maxLines > 1)) {
+    // no greedy wrapping: the lines are fixed and their widths scale with k, so start at the estimated step
+    const w1 = Math.max(...buildLines(1).map(measureLine));
+    n = Math.min(200, Math.max(0, Math.ceil(Math.log(maxWidth / w1) / Math.log(0.98)) || 0));
+    while (n > 0 && fitsAt(n - 1)) n--;
   }
+  while (n < 200 && !fitsAt(n)) n++;
+  // 200 failed steps leave k one step below the last lines tried
+  const k = kAt(n), lines = buildLines(kAt(Math.min(n, 199)));
 
   const lh = lineHeight * k;
   const byRun: Point[][][] = spec.runs.map(() => []);

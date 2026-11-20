@@ -3,6 +3,8 @@
 // Selectors: type, *, #id, .class, [attr], [attr=value], [attr~=value], [attr^=value], [attr$=value], [attr*=value],
 // :not(<compound>), :first-child, :last-child, descendant (space) and child (>) combinators, comma lists.
 
+import { children, nameOf, parentElement } from './dom.js';
+
 interface AttrTest { name: string; op: string; value: string }
 interface Compound {
   tag: string | null;
@@ -19,12 +21,6 @@ export interface Rule { selectors: Complex[]; decls: Record<string, string>; ord
 export interface FontFace { family: string; weight: number; style: string; src: string }
 export interface Stylesheet { rules: Rule[]; fontFaces: FontFace[] }
 
-const nameOf = (el: Element) => el.localName || el.nodeName;
-const parentElement = (el: Element): Element | null => {
-  const p = el.parentNode;
-  return p && p.nodeType === 1 ? (p as Element) : null;
-};
-const elementChildren = (el: Node) => Array.from(el.childNodes || []).filter((n): n is Element => n.nodeType === 1);
 
 function parseCompound(src: string): { compound: Compound; rest: string } {
   const c: Compound = { tag: null, id: null, classes: [], attrs: [], not: [], pseudo: [] };
@@ -106,7 +102,7 @@ function matchesCompound(el: Element, c: Compound): boolean {
   }
   for (const n of c.not) if (matchesCompound(el, n)) return false;
   for (const p of c.pseudo) {
-    const siblings = parentElement(el) ? elementChildren(parentElement(el)!) : [el];
+    const siblings = parentElement(el) ? children(parentElement(el)!) : [el];
     if (p === 'first-child' && siblings[0] !== el) return false;
     else if (p === 'last-child' && siblings[siblings.length - 1] !== el) return false;
     else if (p !== 'first-child' && p !== 'last-child') return false; // :hover etc. never match in print

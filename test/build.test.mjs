@@ -214,3 +214,21 @@ test('--colors merges the closest colours, keeping the ones covering most area',
   near(total(merged), total(all), 0.01, 'same total volume');
   assert.ok(!merged.warnings.some((w) => w.code === 'many-colors'));
 });
+
+test('text shrink-to-fit lands on the largest 0.98 step that fits', async () => {
+  const { layoutText, parseFont } = await import('../dist/core/index.js');
+  const font = await parseFont(new Uint8Array(fs.readFileSync(new URL('../node_modules/@fontsource/inter/files/inter-latin-400-normal.woff', import.meta.url))));
+  const width = (k) => {
+    const { byRun } = layoutText({ runs: [{ text: 'Maximilian Alexander', font, size: 10 * k, spacing: 0 }], x: 0, y: 0 });
+    const xs = byRun[0].flat().map((p) => p[0]);
+    return Math.max(...xs) - Math.min(...xs);
+  };
+  const full = width(1);
+  for (const maxWidth of [full * 2, full * 0.9, full * 0.5, full * 0.2]) {
+    const { scale } = layoutText({ runs: [{ text: 'Maximilian Alexander', font, size: 10, spacing: 0 }], x: 0, y: 0, maxWidth });
+    const n = Math.round(Math.log(scale) / Math.log(0.98));
+    assert.ok(Math.abs(scale - 0.98 ** n) < 1e-9, `scale ${scale} is a 0.98 step`);
+    if (n > 0) assert.ok(width(scale / 0.98) > maxWidth * 0.99, `one step larger (${n - 1}) would still fit`);
+    assert.ok(width(scale) <= maxWidth * 1.01, `fits at step ${n}`);
+  }
+});

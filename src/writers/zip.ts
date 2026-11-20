@@ -16,9 +16,8 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+async function pipe(data: Uint8Array, through: CompressionStream | DecompressionStream): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(new Blob([data as BlobPart]).stream().pipeThrough(through)).arrayBuffer());
 }
 
 export async function zip(files: { name: string; data: Uint8Array | string }[]): Promise<Uint8Array> {
@@ -28,7 +27,7 @@ export async function zip(files: { name: string; data: Uint8Array | string }[]):
   for (const f of files) {
     const name = enc.encode(f.name);
     const raw = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
-    const packed = await deflateRaw(raw);
+    const packed = await pipe(raw, new CompressionStream('deflate-raw'));
     const crc = crc32(raw);
     const h = new DataView(new ArrayBuffer(30));
     h.setUint32(0, 0x04034b50, true);
@@ -71,11 +70,6 @@ export async function zip(files: { name: string; data: Uint8Array | string }[]):
   return out;
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
 /** Reads a ZIP archive (stored or deflated entries, no ZIP64). Returns name → bytes, in archive order. */
 export async function unzip(bytes: Uint8Array): Promise<Map<string, Uint8Array>> {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -97,7 +91,7 @@ export async function unzip(bytes: Uint8Array): Promise<Map<string, Uint8Array>>
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
     const data = bytes.slice(start, start + size);
     if (method === 0) out.set(name, data);
-    else if (method === 8) out.set(name, await inflateRaw(data));
+    else if (method === 8) out.set(name, await pipe(data, new DecompressionStream('deflate-raw')));
     else throw new Error(`ZIP entry ${name} uses unsupported compression ${method}`);
   }
   return out;

@@ -1,10 +1,12 @@
 // SVG document → flat list of painted shapes in millimetres (y down), in document (paint) order.
 import { DOMParser as XmlDomParser } from '@xmldom/xmldom';
 import { parseColor } from './color.js';
-import { matches, parseDeclarations, parseStylesheet, parseWeight, type Rule, type Stylesheet } from './css.js';
-import { FontLibrary } from './fonts.js';
+import { matches, parseDeclarations, parseStylesheet, type Rule, type Stylesheet } from './css.js';
+import { attr, children, hrefOf, nameOf } from './dom.js';
+import type { FontLibrary } from './fonts.js';
 import { IDENTITY, TOLERANCE, apply, cleanPoints, ellipsePath, multiply, parsePathData, parseTransform, rectPath, scale, scaleOf, translate } from './path.js';
-import { layoutText, missingGlyphs, type Run } from './text.js';
+import { renderText } from './svgtext.js';
+import { esc } from './xml.js';
 import type { FillRule, FillShape, StrokeShape, LineCap, LineJoin, Matrix, Point, Shape, Subpath, Warning } from './types.js';
 
 export type Warn = (code: string, message: string) => void;
@@ -50,23 +52,14 @@ export function warningCollector(): { warn: Warn; list: Warning[] } {
 // ---------- variables ----------
 
 const VAR_RE = /\{\{\s*([\w.-]+)\s*\}\}/g;
-const xmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export function findVariables(svgText: string): string[] {
   return [...new Set([...svgText.matchAll(VAR_RE)].map((m) => m[1]))];
 }
 
 export function substitute(svgText: string, vars: Record<string, string>): string {
-  return svgText.replace(VAR_RE, (all, name: string) => (vars[name] != null ? xmlEscape(String(vars[name])) : all));
+  return svgText.replace(VAR_RE, (all, name: string) => (vars[name] != null ? esc(String(vars[name])) : all));
 }
-
-// ---------- DOM helpers ----------
-
-const nameOf = (el: Element) => el.localName || el.nodeName;
-const attr = (el: Element, name: string): string | null => (el.hasAttribute?.(name) ? el.getAttribute(name) : null);
-const children = (el: Node) => Array.from(el.childNodes || []).filter((n): n is Element => n.nodeType === 1);
-const XLINK = 'http://www.w3.org/1999/xlink';
-const hrefOf = (el: Element) => attr(el, 'href') ?? el.getAttributeNS?.(XLINK, 'href') ?? attr(el, 'xlink:href');
 
 // ---------- lengths ----------
 
@@ -85,8 +78,6 @@ export function lengthPx(v: string | null | undefined, rel = 16): number | null 
   if (unit === '%') return (n / 100) * rel;
   return n * PX_PER[unit];
 }
-
-const firstLength = (v: string | null) => (v == null ? null : v.trim().split(/[\s,]+/)[0]);
 
 function viewBoxTransform(vb: number[] | null, w: number, h: number, par: string | null): Matrix {
   if (!vb || vb.length !== 4 || !(vb[2] > 0) || !(vb[3] > 0)) return IDENTITY;
@@ -109,17 +100,20 @@ const parseViewBox = (el: Element) => {
   return vb.length === 4 && vb.every(Number.isFinite) ? vb : null;
 };
 
+const offsetOf = (el: Element) => translate(lengthPx(attr(el, 'x')) ?? 0, lengthPx(attr(el, 'y')) ?? 0);
+
+/** viewBox transform of a nested <svg> or a <use>d <symbol>: `sized` carries width/height, `boxed` the viewBox. */
+function viewportOf(sized: Element, boxed: Element): Matrix {
+  const vb = parseViewBox(boxed);
+  const w = lengthPx(attr(sized, 'width')) ?? (vb ? vb[2] : 0), h = lengthPx(attr(sized, 'height')) ?? (vb ? vb[3] : 0);
+  return viewBoxTransform(vb, w, h, attr(boxed, 'preserveAspectRatio'));
+}
+
 // ---------- styles ----------
 
-type Style = Record<string, string>;
+export type Style = Record<string, string>;
 
-const INHERITED = ['fill', 'fill-rule', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linejoin', 'stroke-linecap',
-  'stroke-miterlimit', 'stroke-opacity', 'stroke-dasharray', 'clip-rule', 'color', 'font-family', 'font-size',
-  'font-weight', 'font-style', 'letter-spacing', 'text-anchor', 'text-transform', 'visibility'];
-const NOT_INHERITED = ['display', 'opacity', 'clip-path', 'mask', 'filter', 'stop-color', 'stop-opacity', 'transform-origin',
-  'marker-start', 'marker-mid', 'marker-end', 'marker'];
-const PROPS = new Set([...INHERITED, ...NOT_INHERITED]);
-
+/** Initial values of the inherited properties. */
 const ROOT_STYLE: Style = {
   fill: 'black', 'fill-rule': 'nonzero', 'fill-opacity': '1', stroke: 'none', 'stroke-width': '1',
   'stroke-linejoin': 'miter', 'stroke-linecap': 'butt', 'stroke-miterlimit': '4', 'stroke-opacity': '1',
@@ -127,6 +121,10 @@ const ROOT_STYLE: Style = {
   'font-weight': '400', 'font-style': 'normal', 'letter-spacing': 'normal', 'text-anchor': 'start',
   'text-transform': 'none', visibility: 'visible',
 };
+const INHERITED = Object.keys(ROOT_STYLE);
+const NOT_INHERITED = ['display', 'opacity', 'clip-path', 'mask', 'filter', 'stop-color', 'stop-opacity', 'transform-origin',
+  'marker-start', 'marker-mid', 'marker-end', 'marker'];
+const PROPS = new Set([...INHERITED, ...NOT_INHERITED]);
 
 function makeStyler(rules: Rule[]) {
   return (el: Element, parent: Style): Style => {
@@ -194,7 +192,7 @@ export function parseSvg(svgText: string, options: ParseOptions = {}, warn: Warn
 
 // ---------- rendering ----------
 
-interface Ctx {
+export interface Ctx {
   T: Matrix;
   style: Style;
   clips: Shape[][];
@@ -214,10 +212,12 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
   const styleOf = makeStyler(svg.stylesheet.rules);
   const out: Shape[] = [];
 
+  const byHref = (href: string | null) => (href ? svg.ids.get(href.replace(/^#/, '')) : undefined);
+
   const paint = (style: Style, which: 'fill' | 'stroke', el: Element): string | null => {
     let value = (style[which] || '').trim();
     if (value === 'currentColor') value = style.color;
-    const url = /^url\(\s*['"]?#([^'")]+)['"]?\s*\)\s*(.*)$/.exec(value);
+    const url = urlRef(value);
     if (url) {
       const ref = svg.ids.get(url[1]);
       const tag = ref && nameOf(ref);
@@ -244,14 +244,13 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
       const st = styleOf(stops[0], ROOT_STYLE);
       return st['stop-color'] || 'black';
     }
-    const href = hrefOf(g);
-    const next = href && svg.ids.get(href.replace(/^#/, ''));
+    const next = byHref(hrefOf(g));
     return next && depth < 10 ? gradientStop(next, depth + 1) : null;
   };
 
   const clipFor = (style: Style, T: Matrix): Shape[] | null => {
-    const m = /^url\(\s*['"]?#([^'")]+)['"]?\s*\)$/.exec((style['clip-path'] || '').trim());
-    if (!m) return null;
+    const m = urlRef((style['clip-path'] || '').trim());
+    if (!m || m[2]) return null;
     const clipEl = svg.ids.get(m[1]);
     if (!clipEl || nameOf(clipEl) !== 'clipPath') { warn('clip-missing', `clip-path #${m[1]} not found; ignored`); return null; }
     if (attr(clipEl, 'clipPathUnits') === 'objectBoundingBox') { warn('clip-bbox', `clip-path #${m[1]} uses objectBoundingBox units; ignored`); return null; }
@@ -266,6 +265,18 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
     target.push({ ...shape, color, element: el, clips: ctx.clips, grow: ctx.grow, ...(ctx.refs.length && { refs: ctx.refs }) } as Shape);
   };
 
+  /** Pushes the fill (none if `fillRule` is null), then the stroke. Returns whether it stroked. */
+  const fillAndStroke = (target: Shape[], el: Element, style: Style, ctx: Ctx, contours: Point[][], fillRule: FillRule | null, paths: Subpath[]): boolean => {
+    const fill = fillRule && paint(style, 'fill', el);
+    if (fill && contours.length) push(target, { kind: 'fill', contours, fillRule: fillRule! }, el, ctx, fill);
+    const stroke = paint(style, 'stroke', el);
+    const width = (lengthPx(style['stroke-width']) ?? 1) * scaleOf(ctx.T);
+    if (!stroke || !(width > 0)) return false;
+    push(target, strokeOf(paths, width, style), el, ctx, stroke);
+    return true;
+  };
+  const textEnv = { fonts, styleOf, warn, push, fillAndStroke };
+
   const walk = (el: Element, parent: Ctx, target: Shape[], clipMode: boolean): void => {
     const tag = nameOf(el);
     if (SKIP.has(tag) || el.namespaceURI && el.namespaceURI !== 'http://www.w3.org/2000/svg' && !clipMode && tag !== 'svg') return;
@@ -279,12 +290,7 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
     }
 
     let T = multiply(parent.T, withOrigin(parseTransform(attr(el, 'transform')), style['transform-origin'], svg.viewport));
-    if (tag === 'svg' && el !== svg.root) {
-      const n = (k: string) => lengthPx(attr(el, k)) ?? 0;
-      const vb = parseViewBox(el);
-      const w = lengthPx(attr(el, 'width')) ?? (vb ? vb[2] : 0), h = lengthPx(attr(el, 'height')) ?? (vb ? vb[3] : 0);
-      T = multiply(multiply(T, translate(n('x'), n('y'))), viewBoxTransform(vb, w, h, attr(el, 'preserveAspectRatio')));
-    }
+    if (tag === 'svg' && el !== svg.root) T = multiply(multiply(T, offsetOf(el)), viewportOf(el, el));
     let clips = parent.clips;
     if (!clipMode) {
       const clip = clipFor(style, T);
@@ -301,23 +307,20 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
     }
     if (tag === 'use') {
       const href = hrefOf(el);
-      const ref = href && svg.ids.get(href.replace(/^#/, ''));
+      const ref = byHref(href);
       if (!ref) { warn('use-missing', `<use> target ${href ?? '(none)'} not found`); return; }
       if (ctx.depth > 20) { warn('use-depth', '<use> nesting too deep (circular reference?)'); return; }
-      const n = (k: string) => lengthPx(attr(el, k)) ?? 0;
-      let Tu = multiply(T, translate(n('x'), n('y')));
+      const Tu = multiply(T, offsetOf(el));
       const inner: Ctx = { ...ctx, T: Tu, refs: [...ctx.refs, el], depth: ctx.depth + 1 };
       if (nameOf(ref) === 'symbol') {
-        const vb = parseViewBox(ref);
-        const w = lengthPx(attr(el, 'width')) ?? (vb ? vb[2] : 0), h = lengthPx(attr(el, 'height')) ?? (vb ? vb[3] : 0);
-        Tu = multiply(Tu, viewBoxTransform(vb, w, h, attr(ref, 'preserveAspectRatio')));
+        const Ts = multiply(Tu, viewportOf(el, ref));
         const sstyle = styleOf(ref, style);
-        for (const c of children(ref)) walk(c, { ...inner, T: Tu, style: sstyle }, target, clipMode);
+        for (const c of children(ref)) walk(c, { ...inner, T: Ts, style: sstyle }, target, clipMode);
       } else walk(ref, inner, target, clipMode);
       return;
     }
     if (tag === 'text') {
-      if (visible || clipMode) renderText(el, ctx, target, clipMode);
+      if (visible || clipMode) renderText(textEnv, el, ctx, target, clipMode);
       return;
     }
     if (!GEOMETRY.has(tag) || (!visible && !clipMode)) return;
@@ -331,102 +334,15 @@ export function renderShapes(svg: SvgDocument, fonts: FontLibrary, warn: Warn = 
       if (contours.length) push(target, { kind: 'fill', contours, fillRule: fillRuleOf(style['clip-rule']) }, el, ctx, '#000000');
       return;
     }
-    const fill = tag === 'line' ? null : paint(style, 'fill', el);
-    if (fill && contours.length) push(target, { kind: 'fill', contours, fillRule: fillRuleOf(style['fill-rule']) }, el, ctx, fill);
-    const stroke = paint(style, 'stroke', el);
-    const width = (lengthPx(style['stroke-width']) ?? 1) * s;
-    if (stroke && width > 0) {
-      if (style['stroke-dasharray'] && style['stroke-dasharray'] !== 'none') warn('dasharray', 'Dashed strokes are printed solid');
-      push(target, strokeOf(paths, width, style), el, ctx, stroke);
-    }
-  };
-
-  const renderText = (textEl: Element, ctx: Ctx, target: Shape[], clipMode: boolean) => {
-    interface Piece { text: string; style: Style; el: Element; grow: number; textCase: string | null }
-    interface Chunk { x: number; y: number; anchor: string; pieces: Piece[] }
-    const startX = lengthPx(firstLength(attr(textEl, 'x'))) ?? 0, startY = lengthPx(firstLength(attr(textEl, 'y'))) ?? 0;
-    const chunks: Chunk[] = [{ x: startX, y: startY, anchor: ctx.style['text-anchor'], pieces: [] }];
-    const s = scaleOf(ctx.T);
-    const collect = (node: Element, style: Style, grow: number, textCase: string | null) => {
-      for (const child of Array.from(node.childNodes)) {
-        if (child.nodeType === 3 || child.nodeType === 4) {
-          chunks[chunks.length - 1].pieces.push({ text: child.nodeValue || '', style, el: node, grow, textCase });
-        } else if (child.nodeType === 1) {
-          const c = child as Element, tag = nameOf(c);
-          if (tag === 'textPath') { warn('textpath', '<textPath> is not supported and was skipped'); continue; }
-          if (tag !== 'tspan' && tag !== 'a') continue;
-          const cs = styleOf(c, style);
-          if (cs.display === 'none') continue;
-          if (attr(c, 'dx') || attr(c, 'dy') || attr(c, 'rotate')) warn('text-offset', 'dx / dy / rotate on text are ignored');
-          const x = lengthPx(firstLength(attr(c, 'x'))), y = lengthPx(firstLength(attr(c, 'y')));
-          if (x != null || y != null) {
-            const prev = chunks[chunks.length - 1];
-            chunks.push({ x: x ?? prev.x, y: y ?? prev.y, anchor: cs['text-anchor'], pieces: [] });
-          }
-          const g = attr(c, 'data-grow');
-          collect(c, cs, g != null ? (parseFloat(g) || 0) * s : grow, attr(c, 'data-case') ?? textCase);
-        }
-      }
-    };
-    collect(textEl, ctx.style, ctx.grow, attr(textEl, 'data-case'));
-    for (const chunk of chunks) {
-      // collapse whitespace across pieces, then trim the chunk
-      const runs: (Run & { piece: Piece })[] = [];
-      let prevSpace = true;
-      for (const piece of chunk.pieces) {
-        let t = piece.text.replace(/\s+/g, ' ');
-        if (prevSpace) t = t.replace(/^ /, '');
-        if (!t) continue;
-        prevSpace = t.endsWith(' ');
-        const st = piece.style;
-        const tt = piece.textCase ?? st['text-transform'];
-        if (tt === 'upper' || tt === 'uppercase') t = t.toUpperCase();
-        if (tt === 'lower' || tt === 'lowercase') t = t.toLowerCase();
-        const family = st['font-family'] || '';
-        const font = fonts.find(family, parseWeight(st['font-weight']), st['font-style'] === 'italic' || st['font-style'] === 'oblique' ? 'italic' : 'normal');
-        if (!font) {
-          throw new Error(`Font "${family || '(none)'}" is not embedded in the SVG. Embed it with @font-face (data: URI) or convert the text to paths.` +
-            (fonts.families.length ? ` Embedded fonts: ${fonts.families.join(', ')}` : ''));
-        }
-        const size = parseFloat(st['font-size']) || 16;
-        runs.push({ text: t, font, size, spacing: st['letter-spacing'] === 'normal' ? 0 : lengthPx(st['letter-spacing'], size) ?? 0, piece });
-      }
-      if (runs.length) runs[runs.length - 1].text = runs[runs.length - 1].text.replace(/ $/, '');
-      const kept = runs.filter((r) => r.text.length);
-      if (!kept.length) continue;
-      for (const r of kept) {
-        const missing = missingGlyphs(r.font, r.text);
-        if (missing.length) throw new Error(`Font "${r.piece.style['font-family']}" has no glyph for ${missing.map((c) => `"${c}"`).join(' ')}`);
-      }
-      const num = (k: string) => (attr(textEl, k) != null ? parseFloat(attr(textEl, k)!) : undefined);
-      const { byRun } = layoutText({
-        runs: kept,
-        x: chunk.x,
-        y: chunk.y,
-        anchor: (['start', 'middle', 'end'].includes(chunk.anchor) ? chunk.anchor : 'start') as 'start' | 'middle' | 'end',
-        maxWidth: num('data-max-width'),
-        maxLines: num('data-max-lines'),
-        lineHeight: num('data-line-height'),
-        valign: attr(textEl, 'data-valign') === 'bottom' ? 'bottom' : 'top',
-      }, TOLERANCE / s);
-      byRun.forEach((local, i) => {
-        if (!local.length) return;
-        const contours = local.map((c) => cleanPoints(c.map((p) => apply(ctx.T, p)), true));
-        const { style, el, grow } = kept[i].piece;
-        const rctx = { ...ctx, grow };
-        if (clipMode) { push(target, { kind: 'fill', contours, fillRule: 'NonZero' }, el, rctx, '#000000'); return; }
-        const fill = paint(style, 'fill', el);
-        if (fill) push(target, { kind: 'fill', contours, fillRule: 'NonZero' }, el, rctx, fill);
-        const stroke = paint(style, 'stroke', el);
-        const width = (lengthPx(style['stroke-width']) ?? 1) * s;
-        if (stroke && width > 0) push(target, strokeOf(contours.map((points) => ({ points, closed: true })), width, style), el, rctx, stroke);
-      });
-    }
+    const stroked = fillAndStroke(target, el, style, ctx, contours, tag === 'line' ? null : fillRuleOf(style['fill-rule']), paths);
+    if (stroked && style['stroke-dasharray'] && style['stroke-dasharray'] !== 'none') warn('dasharray', 'Dashed strokes are printed solid');
   };
 
   walk(svg.root, { T: svg.rootTransform, style: ROOT_STYLE, clips: [], grow: 0, refs: [], depth: 0 }, out, false);
   return out;
 }
+
+const urlRef = (v: string) => /^url\(\s*['"]?#([^'")]+)['"]?\s*\)\s*(.*)$/.exec(v);
 
 const fillRuleOf = (v: string | undefined): FillRule => (v === 'evenodd' ? 'EvenOdd' : 'NonZero');
 

@@ -1,6 +1,7 @@
 // Shapes → manifold cross sections → layers (painter's order) → printability check → meshes.
 // All 2D work happens in millimetres with y down (SVG orientation); meshes are y up.
 import type { CrossSection, ManifoldToplevel } from 'manifold-3d';
+import { signedArea } from './core/color.js';
 import type { Point, Shape, StrokeShape } from './core/types.js';
 import { overlapsZ, type ResolvedLayer } from './layers.js';
 
@@ -24,6 +25,9 @@ type Keep = ReturnType<typeof scope>;
 const segmentsFor = (r: number) => Math.max(8, Math.min(96, Math.ceil(Math.PI / Math.acos(Math.max(-1, 1 - ARC_TOL / r)))));
 
 const empty = (wasm: Wasm) => new wasm.CrossSection([[]]);
+
+/** Axis-aligned rectangle. The caller owns it. */
+export const rect = (wasm: Wasm, x0: number, y0: number, x1: number, y1: number) => new wasm.CrossSection([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]);
 
 function strokeSection(wasm: Wasm, s: StrokeShape, k: Keep): CrossSection {
   const { CrossSection } = wasm;
@@ -90,12 +94,6 @@ function shapeSection(wasm: Wasm, s: Shape, k: Keep): CrossSection {
   return cs;
 }
 
-const signedArea = (poly: readonly (readonly number[])[]) => {
-  let a = 0;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
-  return -a / 2;
-};
-
 function insidePolygon([x, y]: readonly number[], poly: readonly (readonly number[])[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -110,7 +108,7 @@ function insidePolygon([x, y]: readonly number[], poly: readonly (readonly numbe
  * encloses less than `minArea`. Does the same as decompose(), but in JS: decompose() overflows the WASM stack on
  * sets of many thousands of slivers, which is exactly what an opening or closing of a large drawing produces.
  */
-export function splitPieces(wasm: Wasm, cs: CrossSection, minArea = 0): CrossSection[] {
+function splitPieces(wasm: Wasm, cs: CrossSection, minArea = 0): CrossSection[] {
   const polys = cs.toPolygons().map((p) => ({ p, a: signedArea(p) }));
   const outers = polys.filter((x) => x.a > 0).map((x) => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -222,16 +220,15 @@ export function composeLayers(wasm: Wasm, shapes: Shape[], layers: ResolvedLayer
     }
   }
 
-  layers.forEach((l, li) => {
-    if (l.op !== 'subtract') return;
+  for (const l of layers) {
+    if (l.op !== 'subtract') continue;
     const sel = shapes.map((s, i) => i).filter((i) => l.match(shapes[i]));
-    if (!sel.length) return;
+    if (!sel.length) continue;
     const cut = k(CrossSection.union(sel.map(sectionOf)));
     for (const i of painted) {
       if (layers[i].op === 'add' && (!l.from || l.from.includes(layers[i].name))) acc.set(i, k(acc.get(i)!.subtract(cut)));
     }
-    void li;
-  });
+  }
 
   for (const i of painted) {
     const clip = layers[i].clip;
@@ -260,27 +257,25 @@ export function boundsOf(sections: Iterable<CrossSection>): { min: Point; max: P
 
 // ---------- printability check ----------
 
-export interface LayerIssues {
+export interface LayerIssueCounts {
   /** Lines narrower than the minimum feature size. */
-  thin: CrossSection;
+  thin: number;
   /** Gaps between areas of the layer narrower than the minimum feature size (they would close up). */
-  gaps: CrossSection;
+  gaps: number;
   /** Areas of a raised layer with nothing beneath them. */
-  floating: CrossSection;
-  thinCount: number;
-  gapCount: number;
-  floatingCount: number;
-  /** Area of the largest reported piece, mm². */
+  floating: number;
+  /** Area of the largest problem spot, mm² (0 if none). */
   largest: number;
+}
+
+/** Counts, plus where the problems are. The caller owns `areas`. */
+export interface LayerIssues extends LayerIssueCounts {
+  areas: { thin: CrossSection; gaps: CrossSection; floating: CrossSection };
 }
 
 /** Contour count, ignoring hairline slivers that boolean round-off leaves where pieces rejoin. */
 function topology(cs: CrossSection, minArea: number): number {
-  return cs.toPolygons().filter((poly) => {
-    let a = 0;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
-    return Math.abs(a / 2) > minArea;
-  }).length;
+  return cs.toPolygons().filter((poly) => Math.abs(signedArea(poly)) > minArea).length;
 }
 
 /**
@@ -301,7 +296,6 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
   // cached tiles of the layer rather than from the whole layer, which matters for drawings with thousands of shapes.
   const margin = Math.max(3, 10 * r);
   const TILE = 16, PAD = 2 * margin + 8;
-  const rect = (x0: number, y0: number, x1: number, y1: number) => new CrossSection([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]);
   const tilesOf = new Map<CrossSection, Map<string, CrossSection>>();
   const regionFor = (cs: CrossSection, x0: number, y0: number, x1: number, y1: number): CrossSection => {
     const tx = Math.floor(x0 / TILE), ty = Math.floor(y0 / TILE);
@@ -310,7 +304,7 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
     if (!tiles) tilesOf.set(cs, (tiles = new Map()));
     let tile = tiles.get(`${tx},${ty}`);
     if (!tile) {
-      const r0 = rect(tx * TILE, ty * TILE, (tx + 1) * TILE + PAD, (ty + 1) * TILE + PAD);
+      const r0 = rect(wasm, tx * TILE, ty * TILE, (tx + 1) * TILE + PAD, (ty + 1) * TILE + PAD);
       tile = cs.intersect(r0);
       r0.delete();
       tiles.set(`${tx},${ty}`, tile);
@@ -320,7 +314,7 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
   const changesTopology = (cs: CrossSection, piece: CrossSection, op: 'add' | 'subtract') => {
     const b = piece.bounds();
     const [x0, y0, x1, y1] = [b.min[0] - margin, b.min[1] - margin, b.max[0] + margin, b.max[1] + margin];
-    const win = rect(x0, y0, x1, y1);
+    const win = rect(wasm, x0, y0, x1, y1);
     const local = regionFor(cs, x0, y0, x1, y1).intersect(win);
     const changed = op === 'add' ? local.add(piece) : local.subtract(piece);
     const result = topology(local, r * r) !== topology(changed, r * r);
@@ -366,7 +360,10 @@ export function checkLayers(wasm: Wasm, layers: ResolvedLayer[], sections: Map<s
       floating = significant(unsupported, () => true);
     }
     k.free();
-    result.set(layer.name, { thin: thin.cs, gaps: gaps.cs, floating: floating.cs, thinCount: thin.count, gapCount: gaps.count, floatingCount: floating.count, largest: Math.max(thin.largest, gaps.largest, floating.largest) });
+    result.set(layer.name, {
+      thin: thin.count, gaps: gaps.count, floating: floating.count, largest: Math.max(thin.largest, gaps.largest, floating.largest),
+      areas: { thin: thin.cs, gaps: gaps.cs, floating: floating.cs },
+    });
   }
   for (const tiles of tilesOf.values()) for (const t of tiles.values()) t.delete();
   for (const o of occupiedBy.values()) o.delete();
