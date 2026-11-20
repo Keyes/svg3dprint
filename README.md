@@ -167,6 +167,17 @@ npm run demo         # browser demo at http://127.0.0.1:5179/demo/
 npm run demo:build   # production build of the demo into out/demo-dist
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security problems: [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT. The test fixture `text-woff2.svg` embeds Inter (SIL Open Font License).
+[MIT](LICENSE) © Julian Kern.
+
+Dependencies installed with the package keep their own licenses: manifold-3d (Apache-2.0),
+opentype.js, @xmldom/xmldom and woff2-encoder (MIT).
+
+Test files are not part of the npm package and keep their own licenses: `test/fixtures/text-woff2.svg`
+embeds Inter (SIL Open Font License), and the files in `test/corpus/` are listed with license and author
+in [test/corpus/SOURCES.md](test/corpus/SOURCES.md).

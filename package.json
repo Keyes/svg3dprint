@@ -19,8 +19,16 @@
     "multicolor",
     "cli"
   ],
-  "author": "",
+  "author": "Julian Kern",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Keyes/svg3dprint.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Keyes/svg3dprint/issues"
+  },
+  "homepage": "https://github.com/Keyes/svg3dprint#readme",
   "type": "module",
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
@@ -35,7 +43,7 @@
     "vite": "^8.3.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -59,6 +67,7 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ]
 }
