@@ -91,25 +91,32 @@ function roughArea(s: Shape): number {
  * The colour covering more area survives. Returns the shapes with their colours replaced.
  */
 export function mergeColors(shapes: Shape[], max: number): Shape[] {
-  const count = new Map<string, number>();
-  for (const s of shapes) count.set(s.color, (count.get(s.color) ?? 0) + roughArea(s));
-  const groups = [...count].map(([color, n]) => ({ color, n, lab: lab(color), members: [color] }));
-  while (groups.length > Math.max(1, max)) {
-    let best = [0, 1], bestD = Infinity;
-    for (let i = 0; i < groups.length; i++) {
-      for (let j = i + 1; j < groups.length; j++) {
-        const [a, b] = [groups[i].lab, groups[j].lab];
-        const d = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
-        if (d < bestD) { bestD = d; best = [i, j]; }
-      }
-    }
-    const [i, j] = best;
-    const [keep, drop] = groups[i].n >= groups[j].n ? [groups[i], groups[j]] : [groups[j], groups[i]];
+  const area = new Map<string, number>();
+  for (const s of shapes) area.set(s.color, (area.get(s.color) ?? 0) + roughArea(s));
+  const groups = [...area].map(([color, n]) => ({ color, n, lab: lab(color), members: [color], alive: true, near: -1, d: Infinity }));
+  const dist = (a: number[], b: number[]) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+  // each group remembers its nearest neighbour; a merge keeps the survivor's colour, so only groups whose
+  // nearest neighbour disappeared need to look again (about k² work instead of k³ for k colours)
+  const findNear = (g: (typeof groups)[number]) => {
+    g.near = -1; g.d = Infinity;
+    groups.forEach((o, j) => {
+      if (o === g || !o.alive) return;
+      const d = dist(g.lab, o.lab);
+      if (d < g.d) { g.d = d; g.near = j; }
+    });
+  };
+  groups.forEach(findNear);
+  for (let alive = groups.length; alive > Math.max(1, max); alive--) {
+    const a = groups.reduce((best, g) => (g.alive && g.d < best.d ? g : best), { d: Infinity } as (typeof groups)[number]);
+    const b = groups[a.near];
+    const [keep, drop] = a.n >= b.n ? [a, b] : [b, a];
     keep.n += drop.n;
     keep.members.push(...drop.members);
-    groups.splice(groups.indexOf(drop), 1);
+    drop.alive = false;
+    const dropped = groups.indexOf(drop);
+    for (const g of groups) if (g.alive && g.near === dropped) findNear(g);
   }
-  const to = new Map(groups.flatMap((g) => g.members.map((m) => [m, g.color] as const)));
+  const to = new Map(groups.filter((g) => g.alive).flatMap((g) => g.members.map((m) => [m, g.color] as const)));
   return shapes.map((s) => (to.get(s.color) === s.color ? s : { ...s, color: to.get(s.color)! }));
 }
 

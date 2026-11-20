@@ -177,12 +177,23 @@ test('transform-origin: keywords and lengths, relative to the viewport', async (
   // a 40 × 40 square rotated 45° about the viewport centre stays centred: bounding box √2 × 40 around (100, 100)
   const svg = (origin) => `<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="200mm" viewBox="0 0 200 200">
     <rect x="80" y="80" width="40" height="40" transform="rotate(45)" transform-origin="${origin}"/></svg>`;
-  for (const origin of ['center', '50% 50%', '100 100', 'center center']) {
+  for (const origin of ['center', '50% 50%', '100 100', 'center center', 'center 50%']) {
     const r = await build(svg(origin), { clip: false });
     near(r.size[0], 40 * Math.SQRT2, 0.05, origin);
     assert.match(r.layers[0].outline, /M[\d.]+ /);
     const xs = r.layers[0].outline.match(/[\d.]+(?= )/g).map(Number);
     near(Math.min(...xs) + 40 * Math.SQRT2 / 2, 100, 0.05, `${origin} centre`);
+  }
+});
+
+test('transform-origin: a length plus a keyword keeps the length', async () => {
+  // a 20 × 20 rect at x 0–20, turned 180° about x = 10 (its own centre line), stays at x 0–20
+  for (const origin of ['10px center', '10 100', 'top 10px']) {
+    const r = await build(`<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="200mm" viewBox="0 0 200 200">
+      <rect x="0" y="90" width="20" height="20" transform="rotate(180)" transform-origin="${origin}"/></svg>`, { clip: false });
+    const xs = r.layers[0].outline.match(/-?[\d.]+(?= )/g).map(Number);
+    near(Math.min(...xs), 0, 0.01, `${origin} left edge`);
+    near(Math.max(...xs), 20, 0.01, `${origin} right edge`);
   }
 });
 

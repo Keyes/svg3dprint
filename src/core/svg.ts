@@ -436,23 +436,12 @@ const fillRuleOf = (v: string | undefined): FillRule => (v === 'evenodd' ? 'Even
  */
 function withOrigin(T: Matrix, origin: string | undefined, [vw, vh]: [number, number]): Matrix {
   if (!origin || T === IDENTITY) return T;
-  const KEY: Record<string, [number | null, number | null]> = { left: [0, null], right: [1, null], top: [null, 0], bottom: [null, 1], center: [0.5, 0.5] };
-  let x = 0.5 * vw, y = 0.5 * vh;
-  const parts = origin.trim().split(/\s+/).slice(0, 2);
-  // a vertical keyword first ("top left") swaps the order
-  if (parts.length === 2 && (parts[0] === 'top' || parts[0] === 'bottom' || (parts[0] === 'center' && (parts[1] === 'left' || parts[1] === 'right')))) parts.reverse();
-  parts.forEach((p, i) => {
-    const key = KEY[p];
-    if (key) {
-      if (key[0] != null && (i === 0 || p === 'center')) x = key[0] * vw;
-      if (key[1] != null) y = key[1] * vh;
-      if (p === 'center' && i === 1) y = 0.5 * vh;
-      return;
-    }
-    const v = lengthPx(p, i === 0 ? vw : vh);
-    if (v == null) return;
-    if (i === 0) x = v; else y = v;
-  });
+  const v = origin.trim().split(/\s+/).slice(0, 2);
+  if (v.length === 1) v.push('center'); // one value: the other axis is centred
+  if (v[0] === 'top' || v[0] === 'bottom' || v[1] === 'left' || v[1] === 'right') v.reverse(); // "top left" → "left top"
+  const pos = (t: string, size: number) =>
+    t === 'left' || t === 'top' ? 0 : t === 'right' || t === 'bottom' ? size : t === 'center' ? size / 2 : lengthPx(t, size) ?? size / 2;
+  const x = pos(v[0], vw), y = pos(v[1], vh);
   return multiply(multiply(translate(x, y), T), translate(-x, -y));
 }
 

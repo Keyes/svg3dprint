@@ -120,6 +120,7 @@ export async function build(svgText: string, options: Options = {}): Promise<Bui
   const { svg, fonts } = await prepare(svgText, options, warn);
   let shapes = renderShapes(svg, fonts, warn);
   if (!shapes.length) throw new Error('The SVG has nothing to print (no filled or stroked shapes)');
+  if (options.colors && options.layers?.length) warn('colors-ignored', '--colors only applies in colour mode; with a layer config, the layers decide the parts');
   if (!options.layers?.length) {
     const colors = new Set(shapes.map((s) => s.color)).size;
     if (options.colors && colors > options.colors) shapes = mergeColors(shapes, options.colors);
