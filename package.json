@@ -1,6 +1,6 @@
 {
   "name": "svg3dprint",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Turn SVGs into multicolour 3D prints: one part per colour, with a printability check",
   "main": "./dist/index.js",
   "scripts": {
