@@ -62,7 +62,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "svg3dprint": "./dist/cli.js"
+    "svg3dprint": "dist/cli.js"
   },
   "files": [
     "dist",
