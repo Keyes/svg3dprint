@@ -16,6 +16,46 @@ npx svg3dprint check logo.svg --report issues.svg
 npx svg3dprint build logo.svg -p my-printer.3mf   # Bambu Studio project, one filament slot per colour
 ```
 
+## Commands and options
+
+| Command | What it does |
+|---|---|
+| `build <file.svg>` | Writes 3MF and/or STL (or a Bambu Studio project), then prints the printability report |
+| `check <file.svg>` | Only the printability report; exits with 1 if it finds problems |
+| `inspect <file.svg>` | Size, colours, fonts, variables and warnings of the SVG |
+
+| Option | Default | Config key | Description |
+|---|---|---|---|
+| **Layers** | | | |
+| `--thickness <mm>` | `1` | `thickness` | Thickness of every part (flat mode) |
+| `--base <mm>` | off | `base` | Relief mode: the first shape's colour becomes a base plate this thick |
+| `--relief <mm>` | `0.6` | `relief` | Relief mode: thickness of the colours on top of the base plate |
+| `--colors <n>` | off (all colours) | `colors` | Merge similar colours until at most n remain, one filament each |
+| `-c`, `--config <file>` | – | – | Read layers and options from a JSON file (see [Layer modes](#layer-modes)) |
+| **Size** | | | |
+| `--scale <factor>` | `1` | `scale` | Scale the size the SVG declares |
+| `--width <mm>` | from the SVG | `width` | Scale so the drawing is exactly this wide |
+| `--height <mm>` | from the SVG | `height` | Scale so the drawing is exactly this tall |
+| `--no-clip` | clip on | `clip: false` | Keep what lies outside the SVG viewport instead of cutting it off |
+| **Output** | | | |
+| `-o`, `--out <path>` | `<file>.3mf` | – | `file.3mf`, `file.stl` (one `file.<part>.stl` per part) or a directory |
+| `-f`, `--format <list>` | from `--out`, else `3mf` | – | `3mf`, `stl` or `3mf,stl` |
+| `-p`, `--project <3mf>` | – | `project` | Write a Bambu Studio project based on this one: its presets, one filament slot per colour |
+| `--prime-tower` | auto | – | Bambu project: prime tower on (auto = only when two colours share a layer) |
+| `--no-prime-tower` | auto | – | Bambu project: prime tower off |
+| `--report <file>` | – | – | Write the check as `.svg` (top view, problems marked) or `.json` |
+| `--var <key=value>` | – | `vars` | Value for a `{{variable}}` in the SVG; repeat for several |
+| **Check** | | | |
+| `--min-feature <mm>` | `0.35` | `check.minFeature` | Lines and gaps narrower than this are reported |
+| `--min-dot <mm>` | `0` (off) | `check.minDot` | Grow dots smaller than this so the slicer doesn't drop them |
+| `--strict` | off | `strict` | Warnings and printability problems make the command fail (no output is written) |
+| `--json` | off | – | Print the report (or `inspect` result) as JSON |
+| **Other** | | | |
+| `-h`, `--help` | | | Show the help |
+| `-v`, `--version` | | | Show the version |
+
+Options on the command line override the config file.
+
 ## What you get
 
 - **3MF** (default): one object with one part per colour, each carrying its colour. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it as a single multi-part object; you assign a filament to each part.
@@ -55,7 +95,7 @@ npx svg3dprint build logo.svg -p my-printer.3mf   # Bambu Studio project, one fi
 | `clip` | Trim the layer to another layer's outline |
 | `displayColor` | Part colour in the output (default: the colour of its first shape) |
 
-Every CLI flag can also go in the config file (`thickness`, `base`, `relief`, `scale`, `width`, `height`, `clip`, `vars`, `strict`, `check`). Flags given on the command line take precedence.
+The options with a config key in [Commands and options](#commands-and-options) can also go in the config file. Flags given on the command line take precedence.
 
 Selectors support type, `*`, `#id`, `.class`, `[attr]`, `[attr=value]` (and `~=`, `^=`, `$=`, `*=`), `:not()`, `:first-child`, `:last-child`, and the descendant and `>` combinators, in comma-separated lists.
 
