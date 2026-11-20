@@ -1,5 +1,9 @@
 # svg3Dprint
 
+[![CI](https://github.com/Keyes/svg3dprint/actions/workflows/ci.yml/badge.svg)](https://github.com/Keyes/svg3dprint/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/svg3dprint)](https://www.npmjs.com/package/svg3dprint)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Turn SVGs into multicolour 3D prints. Every colour becomes its own part, so your slicer can give each part its own filament. Before you print, a check shows you lines and gaps too thin to print.
 
 Runs as a CLI, as a Node library and in the browser.
@@ -167,9 +171,12 @@ npm run demo         # browser demo at http://127.0.0.1:5179/demo/
 npm run demo:build   # production build of the demo into out/demo-dist
 ```
 
-## Contributing
+## Project
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security problems: [SECURITY.md](SECURITY.md).
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release
+- [CONTRIBUTING.md](CONTRIBUTING.md): reporting bugs, development setup, pull requests, releases
+- [SECURITY.md](SECURITY.md): how to report a security problem privately
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we treat each other in this project
 
 ## License
 

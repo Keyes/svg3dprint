@@ -1,0 +1,16 @@
+name: Feature request
+description: An SVG feature, output format or option you're missing
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The print or workflow you're trying to make, and where svg3dprint gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: How it could work (optional). Example SVGs are welcome.

@@ -39,4 +39,4 @@ with license, author and source link.
 2. `npm version patch` (or `minor` / `major`); this commits and creates the `vX.Y.Z` tag.
 3. `git push --follow-tags`. The Publish workflow tests and publishes to npm with provenance.
 
-By contributing you agree that your contribution is licensed under the MIT license of this project.
+Please follow the [code of conduct](CODE_OF_CONDUCT.md). By contributing you agree that your contribution is licensed under the MIT license of this project.
